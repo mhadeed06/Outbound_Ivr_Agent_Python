@@ -337,7 +337,7 @@ class AzureRealtimeSttService:
         # **Auto-segment on 1 000 ms of silence:**
         speech_config.set_property(
             speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs,
-            "1000"  # 1 seconds of silence
+            "1500"  # 1 seconds of silence
         )
 
         # Audio format matches Telnyx μ-law stream

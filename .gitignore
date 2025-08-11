@@ -4,3 +4,6 @@ __pycache__/
 venv/
 # Environment variables
 .env
+
+# Test file
+test.py
