@@ -7,3 +7,5 @@ venv/
 
 # Test file
 test.py
+
+azure_tts.py

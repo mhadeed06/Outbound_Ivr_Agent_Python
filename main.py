@@ -13,8 +13,9 @@ from datetime import datetime
 import logging
 from azure_stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from pydantic import BaseModel
-
-
+from azure_tts import speak_with_azure
+import re
+from prompt import PROMPT_TEMPLATE
 
 
 
@@ -65,133 +66,52 @@ class CallState:
     agent_id: Optional[str] = None
     app_id: Optional[str] = None
 
+        # NEW: claim capture
+    claim_capture_on: bool = False
+    claim_capture: list[str] = field(default_factory=list)
+
+
+#### Claims helper functions 
+# --- Claim-capture triggers (keep tight & cheap) ---
+CLAIM_START_TRIGGERS = [
+    "i found your claim",
+    "i found two claims",
+    "here's the first one",
+    "here is the first one",
+    "the first one was for service",
+]
+
+CLAIM_END_TRIGGERS = [
+    "claim information is also available",
+    "is there anything else",
+    "thank you for calling",
+    "returning to the main menu",
+    "if there's nothing else", "you can just hang up",
+    "next claim", "look up another date", "switch patients", "main menu",
+]
+
+CLAIM_CAPTURE_MAX_CHARS = 1600  # safety stop
+
+async def _finalize_claim_capture(call_state: CallState, call_control_id: str):
+    summary = " ".join(call_state.claim_capture).strip()
+    logger.info(f"[{call_control_id}] 📄 CLAIM SUMMARY → {summary!r}")
+
+    # reset capture state
+    call_state.claim_capture_on = False
+    call_state.claim_capture.clear()
+
+    # end the call (or you can TTS a polite goodbye first)
+    await hangup_call(call_control_id)
+
+
 
 # Global state management
 active_calls: Dict[str, CallState] = {}
+DEBOUNCE_SECONDS = 0.4  # how long of “quiet” before we treat speech as an utterance
+#0.4 for humana
+#0.4-0.6 for cigna
 
 
-
-
-# Your GPT prompt template for IVR call bot CIGNA
-
-
-#GPT prompt template for IVR call bot Baylor Scott and white health plan
-
-
-PROMPT_TEMPLATE = """
-You are an IVR call assistant (outbound) responding on behalf of a healthcare provider's automated phone system.
-
-Your job is to process IVR system prompts during an interactive phone call.  
-When the system speaks a message (provided as the IVR: message below), respond with the action we should take — in one of these exact response formats:
-
-*********
-Allowed Response Formats:
-- say:<phrase> → speak a word or phrase aloud
-- value:<value> → provide a Member ID, Date of Birth, or NPI
-- dtmf:<digit> → press a keypad digit
-
-
-- confirm:<yes/no> → confirm a heard value
-- endcall → terminate the call
-- fallback → if the IVR message is unclear or unsupported, IF YOU THINK NO ASNWER IS NEEDED, just reply with "fallback" and we will continue listening for the next IVR prompt.
-- ONLY RESPOSNE WITH A VALUE OR SAY IF HE IS ASKING FOR ANY INFORMATION OR CONFINMATION, OTHERWISE JUST REPLY WITH FALLBACK
-***********
-**Rules**: Only use one of the above formats—no extra text.
-
-### Call Flow Outline
-
-Call Information
-***
-Plan Name: SCOTT & WHITE HEALTH PLANS
-NPI: 1407891245
-Member Name: HELEN TREDWAY
-Member Id: B S W one zero zero zero three six nine zero zero
-DOB: 06/18/1964
-DOS: 08/08/2024
-
-what this does
-*Call Flow Instructions*
-
-**** Important******
-ALWAYS RESPOND FROM THE RESPONSE COLUMN, NOT WHAT THE IVR ASKS OR IN THE TRANSCRIPT, MATCH THE INTENT OF THE TRANSCRIPT WITH THE ONE OF THE BELOW STEPS AND RESPOND ACCORDINGLY 
-
-Step 1: Caller Type
-    IVR Prompt: "you can say I'm a provider, or I'm neither of those"
-    Response: say:provider or dtmf:2
-
-
-Step 2: Main Menu
-    IVR asks: "Enrollment status, claim status, benefit details, claims address, authorizations, health services, or network status"
-    Response: say:claim status or dtmf:2
-
-
-Step 3: NPI
-    IVR asks: "Please say or enter your NPI"
-    Response: value:1407891245
-
-
-Step 4: Member ID
-    IVR asks: "Please say or enter the member ID or social security number"
-    Response: value: "B S W one zero zero zero three six nine zero zero"
-
-
-Step 5: Date of Birth
-    IVR asks: "What's the date of birth"
-    Response: value:06/18/1964
-
-Step 6: DOB Confirmation
-    IVR asks: "If the IVR confirms the DOB as 06/18/1964"
-    Response: confirm:yes OR dmtf:1
-    Otherwise say: no or dmtf:2
-    
-Step 6: Member ID or DOB Confirmation
-    IVR asks: "Did you say BSW100036900"
-    Response: confirm:yes
-
-
-Step 6: Date of Service
-    IVR asks: "What's the date of service you'd like to check"
-    Response: value:08/08/2024
-
-Step 7: Found Claim
-    IVR provides: If the IVR says I found your claims, "I found two claims on that date"  OR  "This claim was received on....."
-    End the call with endcall (Donot say endcall, just end the call by returning endcall)
-
-Step 8: Didnot found claims
-    IVR Provides: I didnot found your claims 
-    End the call with endcall (Donot say endcall, just end the call by returning endcall)
-
-***Response Guidelines***
-
-Voice Responses: Always speak clearly and wait for IVR prompts to complete
-Keypad Entries: Enter numbers precisely as shown above
-Confirmations: Always confirm "Yes" when information matches
-***********If you ever receiv a transcript, which doesnot match with the above steps, just send fallback**********
-**If you get a incomplete resposne which you think is not enough to continue, just reply with "fallback" and we will continue listening for the next IVR prompt.**
-
-Error Handling
-
-If asked to repeat information, provide the same data exactly as listed above
-If the system doesn't recognize voice input, try speaking more clearly or 
-If member name doesn't match, verify the Member ID was entered correctly
-### 🚨 Important Rules
-
-- Respond with **only one** exact format — no extra text.
-- Supply value: when the system expects numeric or alphanumeric input.
-- **Use say: when the system expects a spoken response.**
-- Observe confirmation questions and reply yes/no.
-- If unsure, use fallback.
-- We will end the call in 2 scenarios: 1- if we get what we want or 2- if we are not able to get what we want, so end the call with endcall. like the system says something like there is no data for this claim, don't end call for any other reason 
-- Please end the call when the IVR says something like "Looks like you're having trouble. Let's connect you to the agent."
-   then hung up the call with endcall.
-
----
-
-Now, read the following IVR prompt and reply accordingly using the correct format only:
-Process this prompt and don't press any key until you find an explicit instruction to respond.
-
-IVR Message: "{transcript}"
-""".strip()
 
 
 class SimpleCallRequest(BaseModel):
@@ -478,28 +398,90 @@ async def media_stream_endpoint(websocket: WebSocket):
     call_state      = None
     websocket_id    = str(uuid.uuid4())
 
-    # STT callbacks
+    # ───────── Debounce state (per-connection) ─────────
+    from types import SimpleNamespace
+    state = SimpleNamespace(
+        pending_finals=[],                                  # accumulate final STT chunks here
+        debounce_task=None,                                 # the timer task we cancel/restart
+        debounce_time=DEBOUNCE_SECONDS,                  # how long to wait for "silence" before processing
+    )
+
+    async def _process_after_quiet():
+        """
+        Runs after a short quiet gap. If not cancelled by new audio,
+        it joins pending final chunks and treats them as one utterance.
+        """
+        try:
+            await asyncio.sleep(state.debounce_time)        # wait for "silence" gap
+        except asyncio.CancelledError:
+            return                                          # new speech arrived → timer reset
+
+        if not state.pending_finals:
+            return
+
+        text = " ".join(state.pending_finals).strip()
+        state.pending_finals.clear()
+        if not text:
+            return
+
+        # optional latency logging
+        if call_state and hasattr(call_state, "last_media_ts"):
+            ms = (time.perf_counter() - call_state.last_media_ts) * 1000
+            logger.info(f"[{websocket_id}] Debounced STT latency: {ms:.0f} ms")
+
+        # persist and dispatch
+        if call_state:
+            call_state.conversation_history.append({"role": "user", "content": text})
+        await handle_user_speech(text, call_control_id)
+
+    def _reschedule_debounce():
+        """Cancel current timer (if any) and start a fresh one."""
+        if state.debounce_task and not state.debounce_task.done():
+            state.debounce_task.cancel()
+        state.debounce_task = asyncio.create_task(_process_after_quiet())
+
+    async def _flush_pending_now():
+        """
+        Force-process whatever we have (used on 'stop' or disconnect) so we
+        don’t lose the caller’s last utterance.
+        """
+        if state.debounce_task and not state.debounce_task.done():
+            state.debounce_task.cancel()
+
+        if state.pending_finals:
+            text = " ".join(state.pending_finals).strip()
+            state.pending_finals.clear()
+            if text:
+                if call_state and hasattr(call_state, "last_media_ts"):
+                    ms = (time.perf_counter() - call_state.last_media_ts) * 1000
+                    logger.info(f"[{websocket_id}] Debounced STT latency (flush): {ms:.0f} ms")
+                if call_state:
+                    call_state.conversation_history.append({"role": "user", "content": text})
+                await handle_user_speech(text, call_control_id)
+
+    # ───────── Azure STT callbacks ─────────
     async def on_partial(text: str):
-        logger.debug(f"[{websocket_id}] Interim: {text!r}")
+        # partials are unstable; we use them only to reset the quiet timer
+        # logger.debug(f"[{websocket_id}] Interim: {text!r}")
+        _reschedule_debounce()
 
     async def on_final(text: str):
         text = text.strip()
         if not text:
             return
 
-        now = time.perf_counter()
+        # optional: measure time since last inbound audio
         if call_state and hasattr(call_state, "last_media_ts"):
-            ms = (now - call_state.last_media_ts) * 1000
-            logger.info(f"[{websocket_id}] STT latency: {ms:.0f} ms")
+            ms = (time.perf_counter() - call_state.last_media_ts) * 1000
+            logger.info(f"[{websocket_id}] STT final piece latency: {ms:.0f} ms")
 
-        ##logger.info(f"[{websocket_id}] Final transcript: {text!r}")
-        if call_state:
-            call_state.conversation_history.append({"role": "user", "content": text})
-        await handle_user_speech(text, call_control_id)
+        state.pending_finals.append(text)  # accumulate stable text
+        _reschedule_debounce()             # restart quiet timer
 
     async def on_error(err: str):
         logger.error(f"[{websocket_id}] STT error: {err}")
 
+    # ───────── WebSocket receive loop ─────────
     try:
         while True:
             frame = await websocket.receive_text()
@@ -515,13 +497,12 @@ async def media_stream_endpoint(websocket: WebSocket):
                     logger.warning(f"[{websocket_id}] Unknown call ID")
                     continue
 
-                # ======= NEW LINE ===========
-                # so speak_with_azure() can send outbound media back
+                # allow TTS to send outbound audio on the same socket
                 call_state.websocket = websocket
 
+                # create and wire the Azure STT session
                 session = stt_manager.create_session(websocket_id)
                 call_state.azure_stt_session = session
-
                 session.initialize(
                     on_partial_result=on_partial,
                     on_final_result=on_final,
@@ -535,10 +516,14 @@ async def media_stream_endpoint(websocket: WebSocket):
                 if media.get("track") == "inbound" and call_state:
                     pcm = convert_mulaw_to_pcm(base64.b64decode(media["payload"]))
                     call_state.last_media_ts = time.perf_counter()
-                    call_state.azure_stt_session.feed_audio(pcm)
+                    if getattr(call_state, "is_tts_active", False):
+                        pass
+                    else:
+                        call_state.azure_stt_session.feed_audio(pcm)
 
             elif ev == "stop":
                 logger.info(f"[{websocket_id}] Stream stopped")
+                await _flush_pending_now()  # process last utterance, if any
                 break
 
     except WebSocketDisconnect:
@@ -546,6 +531,12 @@ async def media_stream_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"[{websocket_id}] Stream error: {e}")
     finally:
+        # best-effort flush on teardown
+        try:
+            await _flush_pending_now()
+        except Exception:
+            pass
+
         if call_state and call_state.azure_stt_session:
             stt_manager.remove_session(websocket_id)
             logger.info(f"[{websocket_id}] STT session cleaned up")
@@ -563,11 +554,36 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         logger.warning(f"Transcript too short, skipping")
         return
     
+    call_state = active_calls.get(call_control_id)
+    if call_state:
+        low = text.lower()
+
+        # 4a) turn capture ON when a start trigger appears
+        if not call_state.claim_capture_on and any(t in low for t in CLAIM_START_TRIGGERS):
+            call_state.claim_capture_on = True
+            call_state.claim_capture = [text]
+            logger.info(f"[{call_control_id}] 🟢 claim-capture START")
+            return  # do NOT send to Llama
+
+        # 4b) while capture is ON, accumulate text and finish on end trigger/length
+        if call_state.claim_capture_on:
+            call_state.claim_capture.append(text)
+
+            # end conditions: phrase hit or buffer too long
+            if any(t in low for t in CLAIM_END_TRIGGERS) or \
+               len(" ".join(call_state.claim_capture)) >= CLAIM_CAPTURE_MAX_CHARS:
+                logger.info(f"[{call_control_id}] 🔴 claim-capture END condition met")
+                await _finalize_claim_capture(call_state, call_control_id)
+            else:
+                logger.info(f"[{call_control_id}] ➕ claim-capture append ({len(call_state.claim_capture)} parts)")
+            return  # still capturing; do NOT send to Llama
+
+
 
 
     # 1) build full prompt
     prompt = PROMPT_TEMPLATE.format(transcript=transcript)
-    ##logger.info(f"[{call_control_id}] Full Llama prompt: {prompt!r}")
+
 
     # 2) call Llama
     t0 = time.perf_counter()
@@ -619,61 +635,178 @@ async def call_llama_api(prompt: str) -> str:
 
 
 
-
 async def process_llama_response(response: str, call_control_id: str):
     """
-    Process Llama response and take appropriate action
+      - speak only for say/value/confirm
+      - send dtmf only for dtmf
+      - hangup on end/endcall/hangup
+      - ignore everything else (incl. 'fallback')
     """
     if not response:
         logger.info("❗ Llama returned empty response")
         return
-    
-    resp = response.strip()
-    
-    if resp.startswith("dtmf:"):
-        digits = resp.split("dtmf:")[1].strip()
-        logger.info(f"→ Sending DTMF: {digits}")
-        await send_dtmf(digits, call_control_id)
-        
-    elif resp.startswith(("say:", "value:", "confirm:")):
-        phrase = ":".join(resp.split(":")[1:]).strip()
-        logger.info(f"→ Speaking phrase: '{phrase}'")
-        await speak_with_azure(phrase, call_control_id)
-        
-    elif "no response" in resp.lower() or resp == "noresponse":
-        logger.info("→ Llama returned no response: continuing to listen")
-        return
-        
-    elif resp == "endcall":
-        logger.info("→ Hanging up per Llama instruction")
-        await hangup_call(call_control_id)
-        
-    else:
-        logger.info(f"❗ Llama returned unknown action: '{resp}' — fallback listening")
-        return
-    
 
+    s = response.strip().strip("`").strip()
+    if not s:
+        return
+
+    # If it's just a quoted string, treat it as: say <text>
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        s = f"say {s[1:-1].strip()}"
+
+    low = s.lower()
+
+    # Helper: text after keyword (first occurrence), skipping separators and optional quotes
+    def after(keyword: str):
+        i = low.find(keyword)
+        if i == -1:
+            return None
+        j = i + len(keyword)
+        while j < len(s) and s[j] in " :=-\t":
+            j += 1
+        if j >= len(s):
+            return ""
+        if s[j] in ("'", '"'):
+            q = s[j]
+            k = s.find(q, j + 1)
+            return s[j + 1:k].strip() if k != -1 else s[j + 1:].strip()
+        return s[j:].strip()
+
+    # Ignore explicit "fallback" (do nothing)
+    if low == "fallback" or low.startswith("fallback "):
+        logger.info("Llama returned fallback; ignoring")
+        return
+
+    # 1) DTMF (explicit only)
+    if low.startswith("dtmf"):
+        tail = after("dtmf") or ""
+        digits = "".join(ch for ch in tail if ch.isdigit() or ch in "*#")
+        if digits:
+            logger.info(f"→ Sending DTMF: {digits}")
+            await send_dtmf(digits, call_control_id)
+        else:
+            logger.info("DTMF payload empty after sanitizing; ignoring")
+        return
+
+    # 2) SAY / VALUE / CONFIRM → speak
+    for kw in ("say", "value", "confirm"):
+        val = after(kw)
+        if val:
+            logger.info(f"→ Speak ({kw}): {val!r}")
+            await speak_with_azure(val, call_control_id)
+            return
+
+    # 3) End / hangup
+    compact = low.replace(" ", "")
+    if compact in ("endcall", "end", "hangup"):
+        logger.info("→ Hanging up per instruction")
+        await hangup_call(call_control_id)
+        return
+
+    # 4) Explicit no-response → ignore
+    if "no response" in low or compact == "noresponse":
+        logger.info("→ No response; continue listening")
+        return
+
+    # 5) Anything else → ignore (no TTS)
+    logger.info(f"Ignoring unrecognized Llama reply: {s!r}")
 
 
 async def send_dtmf(digits: str, call_control_id: str):
-    """Send DTMF tones to the call"""
+    """Send DTMF tones to the call (digits already sanitized by caller)."""
     try:
         url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/send_dtmf"
         payload = {
-            "digits": digits,
-            "duration_millis": 250,
-            "inter_digit_duration_millis": 250
+            "digits": "".join(ch for ch in digits if ch.isdigit() or ch in "*#"),
+            "duration_millis": 400,
+            "inter_digit_duration_millis": 300
         }
-        
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=HEADERS)
-            logger.info(f"✅ DTMF sent: {digits}")
-            
+            await client.post(url, json=payload, headers=HEADERS)
+        logger.info(f"✅ DTMF sent: {payload['digits']}")
     except Exception as e:
         logger.error(f"❌ Error sending DTMF: {str(e)}")
 
-# ─── 2. speak_with_azure: pull Azure TTS, chunk, and send via your WebSocket ─
 
+
+
+
+
+
+# --- tiny-pause spelling (no global slowdown) ---
+PAUSE_MS_EACH       = 120    # pause between EACH letter/digit
+NUMERIC_HEAVY_RATIO = 0.60   # ~60% digits → treat as code/number
+
+# simple date matcher: M/D/YY, MM/DD/YYYY, etc. (with slashes)
+DATE_SLASH_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{2,4}\s*$")
+
+def _is_date_token(s: str) -> bool:
+    """Detects simple slash-based dates like 06/05/2024 (any M/D/YY or MM/DD/YYYY)."""
+    return bool(DATE_SLASH_RE.match(s))
+
+def _is_code_token(s: str) -> bool:
+    """
+    Single token (no spaces) that looks like a code or long number
+    — but NOT a slash date. We explicitly exclude '/' so dates don't get spelled out.
+    """
+    if not s or any(ch.isspace() for ch in s):
+        return False
+    if "/" in s:               # <-- treat slashy tokens as dates, not codes
+        return False
+    has_letters = any(ch.isalpha() for ch in s)
+    has_digits  = any(ch.isdigit() for ch in s)
+    if not has_digits:
+        return False
+    digit_ratio = sum(ch.isdigit() for ch in s) / len(s)
+    return has_letters or digit_ratio >= NUMERIC_HEAVY_RATIO
+
+voice_name = "en-US-JennyNeural"  # more stable than NovaTurboMultilingual
+
+def _build_ssml_for(text: str) -> str:
+    clean = " ".join(text.split())
+
+    # 1) Dates like 06/05/2024 → speak normally
+    if _is_date_token(clean):
+        return f"""
+<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
+  <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
+    {clean}
+  </voice>
+</speak>
+""".strip()
+
+    # 2) Single code/number token → spell EVERY symbol with small pauses
+    if _is_code_token(clean):
+        tokens = []
+        for ch in clean:
+            if ch.isalpha():
+                tokens.append(f'<lang xml:lang="en-US"><say-as interpret-as="characters">{ch}</say-as></lang>')
+            elif ch.isdigit():
+                tokens.append(f'<lang xml:lang="en-US"><say-as interpret-as="digits">{ch}</say-as></lang>')
+            else:
+                tokens.append(f'<break time="{PAUSE_MS_EACH}ms"/>')  # punctuation
+        inner = f' <break time="{PAUSE_MS_EACH}ms"/> '.join(tokens)
+        return f"""
+<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
+  <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
+    {inner}
+  </voice>
+</speak>
+""".strip()
+
+    # 3) Everything else → normal speech
+    return f"""
+<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
+  <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
+    {clean}
+  </voice>
+</speak>
+""".strip()
+
+
+
+# ─── 2. speak_with_azure: pull Azure TTS, chunk, and send via your WebSocket ─
+TTS_REENABLE_ASR_DELAY = 0.2   # seconds
 async def speak_with_azure(text: str, call_control_id: str):
     """
     Generate Azure TTS audio (8 kHz μ-law) and stream it back to Telnyx
@@ -682,51 +815,48 @@ async def speak_with_azure(text: str, call_control_id: str):
     call_state = active_calls.get(call_control_id)
     ws = getattr(call_state, "websocket", None)
     if not ws:
-        logger.error(f"No WebSocket found for TTS")
+        logger.error("No WebSocket found for TTS")
         return
 
-    logger.info(f" Generating TTS: {text!r}")
-    # build SSML
-    ssml = f"""
-    <speak version="1.0" xml:lang="en-US">
-      <voice xml:lang="en-US" xml:gender="Female"
-             name="en-US-NovaTurboMultilingualNeural">
-        {text}
-      </voice>
-    </speak>
-    """.strip()
+    # NEW: serialize TTS per call and flag we're speaking
+    if not hasattr(call_state, "tts_lock"):
+        call_state.tts_lock = asyncio.Lock()
 
-    url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
-    headers = {
-        "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
-        "Content-Type": "application/ssml+xml",
-        "X-Microsoft-OutputFormat": "raw-8khz-8bit-mono-mulaw",
-    }
+    async with call_state.tts_lock:
+        setattr(call_state, "is_tts_active", True)
+        try:
+            logger.info(f" Generating TTS: {text!r}")
+            ssml = _build_ssml_for(text)
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, content=ssml, headers=headers)
-            resp.raise_for_status()
-            audio_bytes = resp.content
-
-        #logger.info(f" TTS audio size: {len(audio_bytes)} bytes")
-
-        # send in 100 ms chunks (8000 bytes/sec → 800 bytes per 100 ms)
-        chunk_size = 800
-        for offset in range(0, len(audio_bytes), chunk_size):
-            chunk = audio_bytes[offset:offset + chunk_size]
-            payload = base64.b64encode(chunk).decode("ascii")
-            msg = {
-                "event": "media",
-                "media": {"track": "outbound", "payload": payload}
+            url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
+            headers = {
+                "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "raw-8khz-8bit-mono-mulaw",
             }
-            await ws.send_text(json.dumps(msg))
-            await asyncio.sleep(0.1)
 
-        logger.info(f"TTS streaming complete")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, content=ssml, headers=headers)
+                resp.raise_for_status()
+                audio_bytes = resp.content
 
-    except Exception as e:
-        logger.error(f"TTS error: {e}")
+            # Stream ~100 ms frames (800 bytes @ 8kHz μ-law)
+            chunk_size = 800
+            for offset in range(0, len(audio_bytes), chunk_size):
+                chunk = audio_bytes[offset:offset + chunk_size]
+                payload = base64.b64encode(chunk).decode("ascii")
+                msg = {"event": "media", "media": {"track": "outbound", "payload": payload}}
+                await ws.send_text(json.dumps(msg))
+                await asyncio.sleep(0.1)
+
+            # small guard before we re-enable ASR feeding
+            await asyncio.sleep(TTS_REENABLE_ASR_DELAY)
+            logger.info("TTS streaming complete")
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+        finally:
+            setattr(call_state, "is_tts_active", False)
+
 
 
 async def hangup_call(call_control_id: str):
