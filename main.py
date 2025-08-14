@@ -13,10 +13,9 @@ from datetime import datetime
 import logging
 from azure_stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from pydantic import BaseModel
-from azure_tts import speak_with_azure
 import re
 from prompt import PROMPT_TEMPLATE
-
+import claims_agent
 
 
 
@@ -66,50 +65,35 @@ class CallState:
     agent_id: Optional[str] = None
     app_id: Optional[str] = None
 
-        # NEW: claim capture
-    claim_capture_on: bool = False
-    claim_capture: list[str] = field(default_factory=list)
+    claim_mode: bool = False  # NEW
+
+
 
 
 #### Claims helper functions 
 # --- Claim-capture triggers (keep tight & cheap) ---
 CLAIM_START_TRIGGERS = [
     "i found your claim",
+    "i found a claim",
     "i found two claims",
+    "i found 2 claims",
     "here's the first one",
     "here is the first one",
     "the first one was for service",
+    "the first claim",
 ]
 
-CLAIM_END_TRIGGERS = [
-    "claim information is also available",
-    "is there anything else",
-    "thank you for calling",
-    "returning to the main menu",
-    "if there's nothing else", "you can just hang up",
-    "next claim", "look up another date", "switch patients", "main menu",
-]
-
-CLAIM_CAPTURE_MAX_CHARS = 1600  # safety stop
-
-async def _finalize_claim_capture(call_state: CallState, call_control_id: str):
-    summary = " ".join(call_state.claim_capture).strip()
-    logger.info(f"[{call_control_id}] 📄 CLAIM SUMMARY → {summary!r}")
-
-    # reset capture state
-    call_state.claim_capture_on = False
-    call_state.claim_capture.clear()
-
-    # end the call (or you can TTS a polite goodbye first)
-    await hangup_call(call_control_id)
-
+def is_claim_start(text: str) -> bool:
+    low = text.lower()
+    return any(t in low for t in CLAIM_START_TRIGGERS)
 
 
 # Global state management
 active_calls: Dict[str, CallState] = {}
-DEBOUNCE_SECONDS = 0.4  # how long of “quiet” before we treat speech as an utterance
+DEBOUNCE_SECONDS = 0.1  # how long of “quiet” before we treat speech as an utterance
 #0.4 for humana
 #0.4-0.6 for cigna
+#0.1 for boyler scott
 
 
 
@@ -364,6 +348,13 @@ async def handle_call_webhooks(request: Request):
             
         elif event_type == "call.hangup":
             logger.info("🔚 Call ended")
+
+            try:
+                await claims_agent.end_session(call_control_id)
+            except Exception:
+                pass
+            if call_state:
+                call_state.claim_mode = False  
             # Cleanup STT session if exists
             if call_state.azure_stt_session:
                 stt_manager.remove_session(call_state.websocket_id)
@@ -524,6 +515,13 @@ async def media_stream_endpoint(websocket: WebSocket):
             elif ev == "stop":
                 logger.info(f"[{websocket_id}] Stream stopped")
                 await _flush_pending_now()  # process last utterance, if any
+                try:
+                    await claims_agent.end_session(call_control_id)
+                except Exception:
+                    pass   
+                if call_state:
+                    call_state.claim_mode = False   # NEW
+          
                 break
 
     except WebSocketDisconnect:
@@ -555,29 +553,23 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         return
     
     call_state = active_calls.get(call_control_id)
+    
+        # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
-        low = text.lower()
+        if not call_state.claim_mode and is_claim_start(text):
+            # flip flag and start session in claims.py
+            call_state.claim_mode = True
+            await claims_agent.start_session(call_control_id)
+            await claims_agent.handle_final(call_control_id, text)  # send first line
+            return
 
-        # 4a) turn capture ON when a start trigger appears
-        if not call_state.claim_capture_on and any(t in low for t in CLAIM_START_TRIGGERS):
-            call_state.claim_capture_on = True
-            call_state.claim_capture = [text]
-            logger.info(f"[{call_control_id}] 🟢 claim-capture START")
-            return  # do NOT send to Llama
+        if call_state.claim_mode:
+            # while in claim mode, every Final goes to claims.py
+            await claims_agent.handle_final(call_control_id, text)
+            if hasattr(claims_agent, "is_active") and not claims_agent.is_active(call_control_id):
+                call_state.claim_mode = False
 
-        # 4b) while capture is ON, accumulate text and finish on end trigger/length
-        if call_state.claim_capture_on:
-            call_state.claim_capture.append(text)
-
-            # end conditions: phrase hit or buffer too long
-            if any(t in low for t in CLAIM_END_TRIGGERS) or \
-               len(" ".join(call_state.claim_capture)) >= CLAIM_CAPTURE_MAX_CHARS:
-                logger.info(f"[{call_control_id}] 🔴 claim-capture END condition met")
-                await _finalize_claim_capture(call_state, call_control_id)
-            else:
-                logger.info(f"[{call_control_id}] ➕ claim-capture append ({len(call_state.claim_capture)} parts)")
-            return  # still capturing; do NOT send to Llama
-
+            return
 
 
 
@@ -856,6 +848,8 @@ async def speak_with_azure(text: str, call_control_id: str):
             logger.error(f"TTS error: {e}")
         finally:
             setattr(call_state, "is_tts_active", False)
+# REGISTER TTS HANDLER
+claims_agent.register_tts(speak_with_azure)
 
 
 
@@ -884,7 +878,7 @@ async def _auto_hangup(call_control_id: str, delay_seconds: int = 600):
         logger.info(f"⌛ Auto-hanging up call {call_control_id} after {delay_seconds} seconds")
         await hangup_call(call_control_id)
 
-
+claims_agent.register_hangup(hangup_call)
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -892,9 +886,14 @@ async def on_shutdown():
     # Hang up any still-active calls
     for call_id in list(active_calls.keys()):
         try:
+            await claims_agent.end_session(call_id)  # NEW: flush claims, if any
+        except Exception:
+            pass
+        try:
             await hangup_call(call_id)
         except Exception as e:
             logger.error(f"❌ Error hanging up call {call_id}: {e}")
+
     # Clean up all Azure STT sessions
     stt_manager.cleanup_all()
     logger.info("✅ All calls hung up and STT sessions cleaned up. Goodbye!")
