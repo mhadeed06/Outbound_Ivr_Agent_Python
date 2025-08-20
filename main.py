@@ -18,8 +18,6 @@ from prompt import PROMPT_TEMPLATE
 import claims_agent
 
 
-
-
 # Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
@@ -34,6 +32,8 @@ WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")  # Your server URL
 STREAM_BASE_URL = WEBHOOK_BASE_URL.replace("https://", "wss://")
 AZURE_SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
+DEBOUNCE_SECONDS = 0.4  # baseline for cigna
+CLAIM_DEBOUNCE_SECONDS = 1.2  # when in claim mode for cigna 
 
 
 HEADERS = {
@@ -66,6 +66,15 @@ class CallState:
     app_id: Optional[str] = None
 
     claim_mode: bool = False  # NEW
+        # NEW: dynamic debounce control per call
+    debounce_seconds: float = None  # set in __post_init__
+    need_debounce_reset: bool = False
+
+    def __post_init__(self):
+        # default to the global baseline
+        if self.debounce_seconds is None:
+            self.debounce_seconds = DEBOUNCE_SECONDS
+
 
 
 
@@ -90,7 +99,7 @@ def is_claim_start(text: str) -> bool:
 
 # Global state management
 active_calls: Dict[str, CallState] = {}
-DEBOUNCE_SECONDS = 0.1  # how long of “quiet” before we treat speech as an utterance
+#DEBOUNCE_SECONDS = 0.4  # how long of “quiet” before we treat speech as an utterance
 #0.4 for humana
 #0.4-0.6 for cigna
 #0.1 for boyler scott
@@ -115,6 +124,7 @@ async def orchestrate_call_simple(request: Request, wait_for_initiated_ms: int =
     try:
         # ── parse body ───────────────────────────────────────────────────────
         try:
+            
             incoming = await request.json()
         except Exception:
             logger.exception("❌ Invalid JSON body")
@@ -187,7 +197,7 @@ async def orchestrate_call_simple(request: Request, wait_for_initiated_ms: int =
             agent_id=agent_id,
             app_id=app_id
         )
-        asyncio.create_task(_auto_hangup(call_control_id, delay_seconds=600))
+        asyncio.create_task(_auto_hangup(call_control_id, delay_seconds=900))
 
         # ── race-proof wait for 'call.initiated' ─────────────────────────────
         status = "queued"
@@ -234,82 +244,82 @@ async def orchestrate_call_simple(request: Request, wait_for_initiated_ms: int =
 
 
 
-@app.post("/start_call")
-async def start_outbound_call():
-    """Start an outbound call with Azure STT streaming"""
-    try:
-        call_payload = {
-            "to": TEL_TO,
-            "from": TEL_FROM,
-            "connection_id": CALL_CONTROL_APP_ID,
-            "webhook_url": f"{WEBHOOK_BASE_URL}/webhooks/calls",
-            "webhook_url_method": "POST",
-            "stream_url": f"{STREAM_BASE_URL}/stream",
-            "stream_track": "both_tracks",
-            "stream_bidirectional_mode": "rtp",
-            "stream_bidirectional_codec": "PCMU",
-            "send_silence_when_idle": True
-        }
+# @app.post("/start_call")
+# async def start_outbound_call():
+#     """Start an outbound call with Azure STT streaming"""
+#     try:
+#         call_payload = {
+#             "to": TEL_TO,
+#             "from": TEL_FROM,
+#             "connection_id": CALL_CONTROL_APP_ID,
+#             "webhook_url": f"{WEBHOOK_BASE_URL}/webhooks/calls",
+#             "webhook_url_method": "POST",
+#             "stream_url": f"{STREAM_BASE_URL}/stream",
+#             "stream_track": "both_tracks",
+#             "stream_bidirectional_mode": "rtp",
+#             "stream_bidirectional_codec": "PCMU",
+#             "send_silence_when_idle": True
+#         }
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{TELNYX_BASE_URL}/calls",
-                json=call_payload,
-                headers=HEADERS
-            )
+#         async with httpx.AsyncClient() as client:
+#             response = await client.post(
+#                 f"{TELNYX_BASE_URL}/calls",
+#                 json=call_payload,
+#                 headers=HEADERS
+#             )
 
-        # Try to parse JSON, but handle non-JSON bodies
-        try:
-            body = response.json()
-        except Exception as parse_err:
-            logger.exception("❌ Failed to parse JSON from Telnyx")
-            return JSONResponse(
-                {"error": f"Invalid JSON from Telnyx: {response.text}"},
-                status_code=500
-            )
+#         # Try to parse JSON, but handle non-JSON bodies
+#         try:
+#             body = response.json()
+#         except Exception as parse_err:
+#             logger.exception("❌ Failed to parse JSON from Telnyx")
+#             return JSONResponse(
+#                 {"error": f"Invalid JSON from Telnyx: {response.text}"},
+#                 status_code=500
+#             )
 
-        # If Telnyx didn’t return 2xx, surface their error
-        if not (200 <= response.status_code < 300):
-            logger.error(f"❌ Telnyx error {response.status_code}: {body!r}")
-            return JSONResponse(
-                {"error": f"Telnyx returned {response.status_code}: {body!r}"},
-                status_code=500
-            )
+#         # If Telnyx didn’t return 2xx, surface their error
+#         if not (200 <= response.status_code < 300):
+#             logger.error(f"❌ Telnyx error {response.status_code}: {body!r}")
+#             return JSONResponse(
+#                 {"error": f"Telnyx returned {response.status_code}: {body!r}"},
+#                 status_code=500
+#             )
 
-        # Success path: extract data
-        data = body.get("data", {})
-        call_control_id = data.get("call_control_id")
-        call_session_id = data.get("call_session_id")
-        is_alive        = data.get("is_alive")
+#         # Success path: extract data
+#         data = body.get("data", {})
+#         call_control_id = data.get("call_control_id")
+#         call_session_id = data.get("call_session_id")
+#         is_alive        = data.get("is_alive")
 
-        if not call_control_id:
-            logger.error(f"❌ Missing call_control_id in response: {body!r}")
-            return JSONResponse(
-                {"error": f"Missing call_control_id in Telnyx response: {body!r}"},
-                status_code=500
-            )
+#         if not call_control_id:
+#             logger.error(f"❌ Missing call_control_id in response: {body!r}")
+#             return JSONResponse(
+#                 {"error": f"Missing call_control_id in Telnyx response: {body!r}"},
+#                 status_code=500
+#             )
 
-        # Store call state
-        active_calls[call_control_id] = CallState(call_control_id=call_control_id)
-                # 🔔 schedule a 10-minute auto-hangup
-        asyncio.create_task(_auto_hangup(call_control_id, delay_seconds=600))
+#         # Store call state
+#         active_calls[call_control_id] = CallState(call_control_id=call_control_id)
+#                 # 🔔 schedule a 10-minute auto-hangup
+#         asyncio.create_task(_auto_hangup(call_control_id, delay_seconds=900))
 
-        logger.info(f"✅ Call queued: {call_control_id} (is_alive={is_alive})")
+#         logger.info(f"✅ Call queued: {call_control_id} (is_alive={is_alive})")
 
-        return JSONResponse({
-            "success": True,
-            "call_control_id": call_control_id,
-            "call_session_id": call_session_id,
-            "is_alive": is_alive
-        })
+#         return JSONResponse({
+#             "success": True,
+#             "call_control_id": call_control_id,
+#             "call_session_id": call_session_id,
+#             "is_alive": is_alive
+#         })
 
-    except Exception:
-        # Log full stack trace
-        logger.exception("❌ Unexpected error starting outbound call")
-        return JSONResponse(
-            {"error": "Internal error starting call; check server logs"},
-            status_code=500
-        )
+#     except Exception:
+#         # Log full stack trace
+#         logger.exception("❌ Unexpected error starting outbound call")
+#         return JSONResponse(
+#             {"error": "Internal error starting call; check server logs"},
+#             status_code=500
+#         )
 
 
 
@@ -452,14 +462,32 @@ async def media_stream_endpoint(websocket: WebSocket):
 
     # ───────── Azure STT callbacks ─────────
     async def on_partial(text: str):
+        # NEW: sync dynamic debounce (per call)
+        if call_state:
+            desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
+            if state.debounce_time != desired:
+                state.debounce_time = desired
+            if getattr(call_state, "need_debounce_reset", False):
+                _reschedule_debounce()
+                call_state.need_debounce_reset = False
+
         # partials are unstable; we use them only to reset the quiet timer
-        # logger.debug(f"[{websocket_id}] Interim: {text!r}")
         _reschedule_debounce()
+
 
     async def on_final(text: str):
         text = text.strip()
         if not text:
             return
+
+        # NEW: sync dynamic debounce (per call)
+        if call_state:
+            desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
+            if state.debounce_time != desired:
+                state.debounce_time = desired
+            if getattr(call_state, "need_debounce_reset", False):
+                _reschedule_debounce()
+                call_state.need_debounce_reset = False
 
         # optional: measure time since last inbound audio
         if call_state and hasattr(call_state, "last_media_ts"):
@@ -545,47 +573,58 @@ async def media_stream_endpoint(websocket: WebSocket):
 # ─── 1. handle_user_speech: decorate transcript into a full prompt ────────────
 
 async def handle_user_speech(transcript: str, call_control_id: str):
-    #logger.info(f"Received transcript: {transcript!r}")
     text = transcript.strip()
-
     if not transcript or len(transcript) < 3:
         logger.warning(f"Transcript too short, skipping")
         return
-    
+
     call_state = active_calls.get(call_control_id)
-    
-        # ── claim routing (the only logic in main) ──────────────────────────────
+
+    # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
+        # ENTER claim mode
         if not call_state.claim_mode and is_claim_start(text):
-            # flip flag and start session in claims.py
             call_state.claim_mode = True
+            # NEW: bump debounce while in claims flow
+            print("dEBOUNCE TIME CHANGES")
+            call_state.debounce_seconds = CLAIM_DEBOUNCE_SECONDS
+            call_state.need_debounce_reset = True
+
             await claims_agent.start_session(call_control_id)
-            await claims_agent.handle_final(call_control_id, text)  # send first line
+            await claims_agent.handle_final(call_control_id, text)  # send first debounced chunk
             return
 
+        # STAY/EXIT claim mode
         if call_state.claim_mode:
-            # while in claim mode, every Final goes to claims.py
+            # while in claim mode, every debounced chunk goes to claims.py
             await claims_agent.handle_final(call_control_id, text)
+
+            # if the claims session ended, drop out and revert debounce
             if hasattr(claims_agent, "is_active") and not claims_agent.is_active(call_control_id):
                 call_state.claim_mode = False
-
+                call_state.debounce_seconds = DEBOUNCE_SECONDS  # revert to baseline
+                call_state.need_debounce_reset = True
             return
 
+    # ── your normal non-claims path (unchanged) ─────────────────────────────
+    prompt = PROMPT_TEMPLATE.format(
+        transcript=transcript,
+        tax_id="833613394",
+        npi="1407891245",
+        customer_id="H44918729",
+        dob="8/7/1945",
+        member_name="PAUL HESS",
+        dos="1/23/2025"
+    )
 
-
-    # 1) build full prompt
-    prompt = PROMPT_TEMPLATE.format(transcript=transcript)
-
-
-    # 2) call Llama
     t0 = time.perf_counter()
     response = await call_llama_api(prompt)
     llama_ms = (time.perf_counter() - t0) * 1000
     logger.info(f"Llama latency: {llama_ms:.0f} ms")
     logger.info(f"Llama response: {response!r}")
 
-    # 3) dispatch
     await process_llama_response(response, call_control_id)
+
 
 
 
@@ -869,7 +908,7 @@ async def hangup_call(call_control_id: str):
 ####   Function to auto hangup calls after a delay
 # This function will be called in the background to auto hangup calls after a delay
 
-async def _auto_hangup(call_control_id: str, delay_seconds: int = 600):
+async def _auto_hangup(call_control_id: str, delay_seconds: int = 900):
     """
     Wait `delay_seconds`, and if the call is still active, hang it up.
     """
