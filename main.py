@@ -32,7 +32,7 @@ WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")  # Your server URL
 STREAM_BASE_URL = WEBHOOK_BASE_URL.replace("https://", "wss://")
 AZURE_SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
-DEBOUNCE_SECONDS = 0.4  # baseline for cigna
+DEBOUNCE_SECONDS = 0.1  # baseline for cigna
 CLAIM_DEBOUNCE_SECONDS = 1.2  # when in claim mode for cigna 
 
 
@@ -77,8 +77,16 @@ class CallState:
 
 
 
-
-
+CLAIM_NOT_FOUND_TRIGGERS = [
+    "i couldn't find any claims",
+    "i did not find any claims",
+    "no claims found",
+    "there are no claims on that date",
+    "no matching claims",
+    "i’m not seeing any claims for that",
+]
+def is_claim_not_found(text: str) -> bool:
+    return any(phrase in text.lower() for phrase in CLAIM_NOT_FOUND_TRIGGERS)
 #### Claims helper functions 
 # --- Claim-capture triggers (keep tight & cheap) ---
 CLAIM_START_TRIGGERS = [
@@ -582,6 +590,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
     # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
+        if is_claim_not_found(text):
+            logger.info("❌ No claims found for this patient. Hanging up.")
+            await hangup_call(call_control_id)
+            return
+
         # ENTER claim mode
         if not call_state.claim_mode and is_claim_start(text):
             call_state.claim_mode = True
@@ -610,11 +623,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt = PROMPT_TEMPLATE.format(
         transcript=transcript,
         tax_id="833613394",
-        npi="1407891245",
-        customer_id="H44918729",
-        dob="8/7/1945",
-        member_name="PAUL HESS",
-        dos="1/23/2025"
+        npi="1285144311",
+        customer_id="100099748800",
+        dob="8/3/1970",
+        member_name="INDIA WALKER",
+        dos="4/2/2025"
     )
 
     t0 = time.perf_counter()
