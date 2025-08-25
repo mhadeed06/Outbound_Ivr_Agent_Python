@@ -5,6 +5,8 @@ import httpx
 import logging
 from typing import Dict, List
 from dotenv import load_dotenv
+from insurance_config import config_manager
+from claims_prompts import get_claims_prompt
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -12,39 +14,46 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY is not set")
 
-CLAIMS_TAIL_CHARS  = 200     ### 250 for CIGNA    ## 150 for humana    ### 200 FOR BUYLER SCOTT
+#CLAIMS_TAIL_CHARS  = 200     ### 250 for CIGNA    ## 150 for humana    ### 200 FOR BUYLER SCOTT
+def get_claims_tail_chars() -> int:
+    """Get claims tail chars for current insurance"""
+    return config_manager.get_claims_tail_chars()
 
+def get_controller_prompt_template() -> str:
+    """Get the controller prompt template for current insurance"""
+    config = config_manager.get_config()
+    return get_claims_prompt(config.claims_prompt_template)
 
 # Baylor Scott Claims IVR Controller Prompt
 
-CONTROLLER_PROMPT_TEMPLATE = """
-You are an IVR controller for Baylor Scott Claims flow.
+# CONTROLLER_PROMPT_TEMPLATE = """
+# You are an IVR controller for Baylor Scott Claims flow.
 
-**IMPORTANT NOTE**
-"ONLY REPLY WITH THE SPECIFIED RESPONSES. IF THE TRANSCRIPT ONLY CARRIES CLAIM DETAILS/DATA, THEN JUST REPLY WITH CONTINUE"
-"If you get multiple options in a transcript, give priority to progressing through claims or ending appropriately"
+# **IMPORTANT NOTE**
+# "ONLY REPLY WITH THE SPECIFIED RESPONSES. IF THE TRANSCRIPT ONLY CARRIES CLAIM DETAILS/DATA, THEN JUST REPLY WITH CONTINUE"
+# "If you get multiple options in a transcript, give priority to progressing through claims or ending appropriately"
 
-**Baylor Scott Claims Flow:**
-- After claim details, you'll hear options like: "repeat that or press 1, NEXT CLAIM, previous claim, switch provider, main menu, check another date another member"
-- If "NEXT CLAIM" option is available → respond with NEXT CLAIM
-- If "NEXT CLAIM" option is NOT available (usually after last claim) → respond with STOP
+# **Baylor Scott Claims Flow:**
+# - After claim details, you'll hear options like: "repeat that or press 1, NEXT CLAIM, previous claim, switch provider, main menu, check another date another member"
+# - If "NEXT CLAIM" option is available → respond with NEXT CLAIM
+# - If "NEXT CLAIM" option is NOT available (usually after last claim) → respond with STOP
 
-*Analyze the transcript and return ONE of these responses:*
+# *Analyze the transcript and return ONE of these responses:*
 
-1- **NEXT CLAIM** - When you hear "NEXT CLAIM" in the options after claim details
-2- **STOP** - When claim details are provided but "NEXT CLAIM" is NOT mentioned in the options (indicates last claim)
-3- **CONTINUE** - For everything else (claim details, explanations, data reading)
+# 1- **NEXT CLAIM** - When you hear "NEXT CLAIM" in the options after claim details
+# 2- **STOP** - When claim details are provided but "NEXT CLAIM" is NOT mentioned in the options (indicates last claim)
+# 3- **CONTINUE** - For everything else (claim details, explanations, data reading)
 
-**Examples:**
-- "Here are the details... you can say repeat that, NEXT CLAIM, previous claim, main menu" → **NEXT CLAIM**
-- "Here are the details... you can say repeat that, previous claim, switch provider, main menu" → **STOP** (no NEXT CLAIM option)
-- "I found 2 claims, here is the first one and its details..." → **CONTINUE**
+# **Examples:**
+# - "Here are the details... you can say repeat that, NEXT CLAIM, previous claim, main menu" → **NEXT CLAIM**
+# - "Here are the details... you can say repeat that, previous claim, switch provider, main menu" → **STOP** (no NEXT CLAIM option)
+# - "I found 2 claims, here is the first one and its details..." → **CONTINUE**
 
-TRANSCRIPT: "{transcript_chunk}"
+# TRANSCRIPT: "{transcript_chunk}"
 
-Reply with ONE RESPONSE: NEXT CLAIM, STOP, or CONTINUE
-Answer:
-""".strip()
+# Reply with ONE RESPONSE: NEXT CLAIM, STOP, or CONTINUE
+# Answer:
+# """.strip()
 # ==========================================================================================
 
 # per-call state
@@ -127,7 +136,8 @@ async def handle_final(call_id: str, utterance: str):
 
         # 2) build transcript and take a small tail for the controller
         full_transcript = " ".join(s["current"])
-        chunk = full_transcript[-CLAIMS_TAIL_CHARS:].strip()   ### 250 characters for cigna 
+        tail_chars = get_claims_tail_chars()
+        chunk = full_transcript[-tail_chars:].strip()   ### 250 characters for cigna 
 
         # 3) ask GPT for ONE WORD intent
         intent = await _ask_gpt_keyword(call_id, chunk)
@@ -191,8 +201,10 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
     """
     if not OPENAI_API_KEY:
         return "CONTINUE"
+    
+    prompt_template = get_controller_prompt_template()
 
-    system_prompt = CONTROLLER_PROMPT_TEMPLATE.format(transcript_chunk=transcript_chunk)
+    system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
 
     # minimal logs: what we send + what we get
     logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")

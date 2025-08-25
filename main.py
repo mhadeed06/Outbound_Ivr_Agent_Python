@@ -14,8 +14,10 @@ import logging
 from azure_stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from pydantic import BaseModel
 import re
-from prompt import PROMPT_TEMPLATE
+#from prompt import PROMPT_TEMPLATE
 import claims_agent
+from insurance_config import config_manager
+from prompt import get_main_prompt_template
 
 
 # Load environment variables
@@ -25,15 +27,21 @@ load_dotenv()
 # Configuration
 TELNYX_API_KEY = os.getenv("TELNYX_API_KEY")
 TELNYX_BASE_URL = "https://api.telnyx.com/v2"
-TEL_TO = os.getenv("TEL_TO")  # Number to call
+#TEL_TO = os.getenv("TEL_TO")  # Number to call
 TEL_FROM = os.getenv("TEL_FROM")  # Your Telnyx number
 CALL_CONTROL_APP_ID = os.getenv("CALL_CONTROL_APP_ID")
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")  # Your server URL
 STREAM_BASE_URL = WEBHOOK_BASE_URL.replace("https://", "wss://")
 AZURE_SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
-DEBOUNCE_SECONDS = 0.1  # baseline for cigna
-CLAIM_DEBOUNCE_SECONDS = 1.2  # when in claim mode for cigna 
+
+TEL_TO = config_manager.get_phone_number()  
+
+DEBOUNCE_SECONDS = config_manager.get_debounce_seconds()
+CLAIM_DEBOUNCE_SECONDS = config_manager.get_claim_debounce_seconds()
+
+#DEBOUNCE_SECONDS = 0.1  # baseline for cigna
+#CLAIM_DEBOUNCE_SECONDS = 1.2  # when in claim mode for cigna 
 
 
 HEADERS = {
@@ -73,7 +81,9 @@ class CallState:
     def __post_init__(self):
         # default to the global baseline
         if self.debounce_seconds is None:
-            self.debounce_seconds = DEBOUNCE_SECONDS
+            self.debounce_seconds = config_manager.get_debounce_seconds()
+            print("debounce secs")
+            print(self.debounce_seconds )
 
 
 
@@ -436,7 +446,7 @@ async def media_stream_endpoint(websocket: WebSocket):
         # optional latency logging
         if call_state and hasattr(call_state, "last_media_ts"):
             ms = (time.perf_counter() - call_state.last_media_ts) * 1000
-            logger.info(f"[{websocket_id}] Debounced STT latency: {ms:.0f} ms")
+            logger.info(f" Debounced STT latency: {ms:.0f} ms")
 
         # persist and dispatch
         if call_state:
@@ -463,7 +473,7 @@ async def media_stream_endpoint(websocket: WebSocket):
             if text:
                 if call_state and hasattr(call_state, "last_media_ts"):
                     ms = (time.perf_counter() - call_state.last_media_ts) * 1000
-                    logger.info(f"[{websocket_id}] Debounced STT latency (flush): {ms:.0f} ms")
+                    logger.info(f" Debounced STT latency (flush): {ms:.0f} ms")
                 if call_state:
                     call_state.conversation_history.append({"role": "user", "content": text})
                 await handle_user_speech(text, call_control_id)
@@ -500,7 +510,7 @@ async def media_stream_endpoint(websocket: WebSocket):
         # optional: measure time since last inbound audio
         if call_state and hasattr(call_state, "last_media_ts"):
             ms = (time.perf_counter() - call_state.last_media_ts) * 1000
-            logger.info(f"[{websocket_id}] STT final piece latency: {ms:.0f} ms")
+            logger.info(f" STT final piece latency: {ms:.0f} ms")
 
         state.pending_finals.append(text)  # accumulate stable text
         _reschedule_debounce()             # restart quiet timer
@@ -517,11 +527,11 @@ async def media_stream_endpoint(websocket: WebSocket):
 
             if ev == "start":
                 call_control_id = msg["start"]["call_control_id"]
-                logger.info(f"[{websocket_id}] Call started: {call_control_id}")
+                logger.info(f" Call started: {call_control_id}")
 
                 call_state = active_calls.get(call_control_id)
                 if not call_state:
-                    logger.warning(f"[{websocket_id}] Unknown call ID")
+                    logger.warning(f" Unknown call ID")
                     continue
 
                 # allow TTS to send outbound audio on the same socket
@@ -549,7 +559,7 @@ async def media_stream_endpoint(websocket: WebSocket):
                         call_state.azure_stt_session.feed_audio(pcm)
 
             elif ev == "stop":
-                logger.info(f"[{websocket_id}] Stream stopped")
+                logger.info(f" Stream stopped")
                 await _flush_pending_now()  # process last utterance, if any
                 try:
                     await claims_agent.end_session(call_control_id)
@@ -561,9 +571,9 @@ async def media_stream_endpoint(websocket: WebSocket):
                 break
 
     except WebSocketDisconnect:
-        logger.info(f"[{websocket_id}] WebSocket disconnected")
+        logger.info(f" WebSocket disconnected")
     except Exception as e:
-        logger.error(f"[{websocket_id}] Stream error: {e}")
+        logger.error(f" Stream error: {e}")
     finally:
         # best-effort flush on teardown
         try:
@@ -573,7 +583,7 @@ async def media_stream_endpoint(websocket: WebSocket):
 
         if call_state and call_state.azure_stt_session:
             stt_manager.remove_session(websocket_id)
-            logger.info(f"[{websocket_id}] STT session cleaned up")
+            logger.info(f" STT session cleaned up")
 
 
 
@@ -600,7 +610,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
             call_state.claim_mode = True
             # NEW: bump debounce while in claims flow
             print("dEBOUNCE TIME CHANGES")
-            call_state.debounce_seconds = CLAIM_DEBOUNCE_SECONDS
+            call_state.debounce_seconds = config_manager.get_claim_debounce_seconds()
             call_state.need_debounce_reset = True
 
             await claims_agent.start_session(call_control_id)
@@ -615,20 +625,23 @@ async def handle_user_speech(transcript: str, call_control_id: str):
             # if the claims session ended, drop out and revert debounce
             if hasattr(claims_agent, "is_active") and not claims_agent.is_active(call_control_id):
                 call_state.claim_mode = False
-                call_state.debounce_seconds = DEBOUNCE_SECONDS  # revert to baseline
+                call_state.debounce_seconds = config_manager.get_debounce_seconds()  # revert to baseline
                 call_state.need_debounce_reset = True
             return
 
-    # ── your normal non-claims path (unchanged) ─────────────────────────────
-    prompt = PROMPT_TEMPLATE.format(
+
+
+    prompt_template = get_main_prompt_template()  # Gets correct template for current insurance
+    prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi="1285144311",
-        customer_id="100099748800",
-        dob="8/3/1970",
-        member_name="INDIA WALKER",
-        dos="4/2/2025"
+        npi= "1407891245",
+        customer_id= "102775279",
+        dob=  "4/14/1990",
+        member_name= "JACOB RITTIMANN",
+        dos="5/08/2025"
     )
+
 
     t0 = time.perf_counter()
     response = await call_llama_api(prompt)
@@ -917,6 +930,51 @@ async def hangup_call(call_control_id: str):
     except Exception as e:
         logger.error(f"❌ Error hanging up call: {str(e)}")
 
+
+async def hangup_call(call_control_id: str):
+    """Hangup the call"""
+    try:
+        url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/hangup"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=HEADERS)
+            logger.info(f"✅ Call hung up: {call_control_id}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error hanging up call: {str(e)}")
+
+
+####   Function to auto hangup calls after a delay
+# This function will be called in the background to auto hangup calls after a delay
+
+async def _auto_hangup(call_control_id: str, delay_seconds: int = 900):
+    """
+    Wait `delay_seconds`, and if the call is still active, hang it up.
+    """
+    await asyncio.sleep(delay_seconds)
+    if call_control_id in active_calls:
+        logger.info(f"⌛ Auto-hanging up call {call_control_id} after {delay_seconds} seconds")
+        await hangup_call(call_control_id)
+
+claims_agent.register_hangup(hangup_call)
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    logger.info("🔌 Shutdown event: hanging up all active calls…")
+    # Hang up any still-active calls
+    for call_id in list(active_calls.keys()):
+        try:
+            await claims_agent.end_session(call_id)  # NEW: flush claims, if any
+        except Exception:
+            pass
+        try:
+            await hangup_call(call_id)
+        except Exception as e:
+            logger.error(f"❌ Error hanging up call {call_id}: {e}")
+
+    # Clean up all Azure STT sessions
+    stt_manager.cleanup_all()
+    logger.info("✅ All calls hung up and STT sessions cleaned up. Goodbye!")
 
 ####   Function to auto hangup calls after a delay
 # This function will be called in the background to auto hangup calls after a delay
