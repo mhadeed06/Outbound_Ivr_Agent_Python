@@ -24,38 +24,6 @@ def get_controller_prompt_template() -> str:
     config = config_manager.get_config()
     return get_claims_prompt(config.claims_prompt_template)
 
-# Baylor Scott Claims IVR Controller Prompt
-
-# CONTROLLER_PROMPT_TEMPLATE = """
-# You are an IVR controller for Baylor Scott Claims flow.
-
-# **IMPORTANT NOTE**
-# "ONLY REPLY WITH THE SPECIFIED RESPONSES. IF THE TRANSCRIPT ONLY CARRIES CLAIM DETAILS/DATA, THEN JUST REPLY WITH CONTINUE"
-# "If you get multiple options in a transcript, give priority to progressing through claims or ending appropriately"
-
-# **Baylor Scott Claims Flow:**
-# - After claim details, you'll hear options like: "repeat that or press 1, NEXT CLAIM, previous claim, switch provider, main menu, check another date another member"
-# - If "NEXT CLAIM" option is available → respond with NEXT CLAIM
-# - If "NEXT CLAIM" option is NOT available (usually after last claim) → respond with STOP
-
-# *Analyze the transcript and return ONE of these responses:*
-
-# 1- **NEXT CLAIM** - When you hear "NEXT CLAIM" in the options after claim details
-# 2- **STOP** - When claim details are provided but "NEXT CLAIM" is NOT mentioned in the options (indicates last claim)
-# 3- **CONTINUE** - For everything else (claim details, explanations, data reading)
-
-# **Examples:**
-# - "Here are the details... you can say repeat that, NEXT CLAIM, previous claim, main menu" → **NEXT CLAIM**
-# - "Here are the details... you can say repeat that, previous claim, switch provider, main menu" → **STOP** (no NEXT CLAIM option)
-# - "I found 2 claims, here is the first one and its details..." → **CONTINUE**
-
-# TRANSCRIPT: "{transcript_chunk}"
-
-# Reply with ONE RESPONSE: NEXT CLAIM, STOP, or CONTINUE
-# Answer:
-# """.strip()
-# ==========================================================================================
-
 # per-call state
 _sessions: Dict[str, Dict] = {}       # call_id -> {"active": bool, "current": List[str], "claims": List[str]}
 _locks: Dict[str, asyncio.Lock] = {}  # call_id -> asyncio.Lock

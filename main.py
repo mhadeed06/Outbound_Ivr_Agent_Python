@@ -407,7 +407,6 @@ async def handle_call_webhooks(request: Request):
 
 # ——— STREAMING ENDPOINT ————————————————————————————————————————
 
-
 @app.websocket("/stream")
 async def media_stream_endpoint(websocket: WebSocket):
     logger.info("🔗 New WebSocket connection")
@@ -635,11 +634,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1407891245",
-        customer_id= "102775279",
-        dob=  "4/14/1990",
-        member_name= "JACOB RITTIMANN",
-        dos="5/08/2025"
+        npi= "1285144311",
+        customer_id= "H53987455",
+        dob=  "11/9/1949",
+        member_name= "RANDY TREDWAY",
+        dos="7/15/2024"
     )
 
 
@@ -931,17 +930,17 @@ async def hangup_call(call_control_id: str):
         logger.error(f"❌ Error hanging up call: {str(e)}")
 
 
-async def hangup_call(call_control_id: str):
-    """Hangup the call"""
-    try:
-        url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/hangup"
+# async def hangup_call(call_control_id: str):
+#     """Hangup the call"""
+#     try:
+#         url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/hangup"
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=HEADERS)
-            logger.info(f"✅ Call hung up: {call_control_id}")
+#         async with httpx.AsyncClient() as client:
+#             response = await client.post(url, headers=HEADERS)
+#             logger.info(f"✅ Call hung up: {call_control_id}")
             
-    except Exception as e:
-        logger.error(f"❌ Error hanging up call: {str(e)}")
+#     except Exception as e:
+#         logger.error(f"❌ Error hanging up call: {str(e)}")
 
 
 ####   Function to auto hangup calls after a delay
@@ -976,19 +975,6 @@ async def on_shutdown():
     stt_manager.cleanup_all()
     logger.info("✅ All calls hung up and STT sessions cleaned up. Goodbye!")
 
-####   Function to auto hangup calls after a delay
-# This function will be called in the background to auto hangup calls after a delay
-
-async def _auto_hangup(call_control_id: str, delay_seconds: int = 900):
-    """
-    Wait `delay_seconds`, and if the call is still active, hang it up.
-    """
-    await asyncio.sleep(delay_seconds)
-    if call_control_id in active_calls:
-        logger.info(f"⌛ Auto-hanging up call {call_control_id} after {delay_seconds} seconds")
-        await hangup_call(call_control_id)
-
-claims_agent.register_hangup(hangup_call)
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -1012,8 +998,6 @@ async def on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=5000)
-
-
 
 
 #  TO run hit the start_call endpoint
