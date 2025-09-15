@@ -300,6 +300,8 @@ what this does
 
 **** Important******
 ALWAYS RESPOND FROM THE RESPONSE COLUMN, NOT WHAT THE IVR ASKS OR IN THE TRANSCRIPT, MATCH THE INTENT OF THE TRANSCRIPT WITH THE ONE OF THE BELOW STEPS AND RESPOND ACCORDINGLY 
+*and if the ivr prompt includes "is that the correct one press 1 for yes or two for no" always asnwer with Yes or No, according to the script*
+
 
 Step 0: Initial Greeting
     IVR Prompt: "For calling Baylor Scott and white health plan
@@ -331,8 +333,9 @@ Step 6: DOB Confirmation
     Otherwise say: no or dmtf:2
     
 Step 6: Member ID Confirmation
-    IVR asks: "Did you say {customer_id}"
+    IVR asks: "Just to be sure the ID or SSN that you gave me was {customer_id} is that correct"
     Response: confirm:yes
+    *Note*: if the number provided in the transcript is different from the one in the call information, say no or press dmtf:2
 
 Step 6: Date of Service
     IVR asks: "What's the date of service you'd like to check"

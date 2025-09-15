@@ -87,9 +87,73 @@ class CallState:
 
 
 
+# Global state management
+active_calls: Dict[str, CallState] = {}
+
+
+# --- Unified, idempotent cleanup for a call ---
+async def ensure_call_cleanup(call_control_id: str, *, reason: str, send_hangup: bool):
+    """
+    Safe to call from: webhook, WebSocket finally, auto-hangup, shutdown, or any early-exit.
+    - Ends claims session (if active)
+    - Cleans Azure STT session
+    - Optionally issues a hangup to Telnyx (when WE need to end it)
+    - Clears flags and removes from active_calls
+    Idempotent: calling this multiple times is safe.
+    """
+    cs = active_calls.get(call_control_id)
+    if not cs:
+        return
+
+    # Lazily add guard fields to CallState to avoid changing your dataclass
+    if not hasattr(cs, "cleanup_lock"):
+        import asyncio as _asyncio
+        cs.cleanup_lock = _asyncio.Lock()
+    if not hasattr(cs, "cleanup_done"):
+        cs.cleanup_done = False
+
+    async with cs.cleanup_lock:
+        if cs.cleanup_done:
+            return
+
+        logger.info(f"🧹 Cleanup [{call_control_id}] due to: {reason}")
+
+        # 1) Stop claims flow (safe if already ended)
+        try:
+            await claims_agent.end_session(call_control_id)
+        except Exception as e:
+            logger.warning(f"[{call_control_id}] end_session error (ignored): {e}")
+
+        # 2) Stop/cleanup STT session
+        try:
+            if getattr(cs, "azure_stt_session", None):
+                stt_manager.remove_session(cs.websocket_id)
+        except Exception as e:
+            logger.warning(f"[{call_control_id}] STT cleanup error (ignored): {e}")
+
+        # 3) If WE should send hangup (e.g., WS died first / auto timeout), do it
+        #    If webhook already confirmed hangup, skip issuing it again.
+        if send_hangup and getattr(cs, "status", "") not in ("hangup", "ended"):
+            try:
+                await hangup_call(call_control_id)
+            except Exception as e:
+                logger.warning(f"[{call_control_id}] hangup_call error (ignored): {e}")
+
+        # 4) Clear flags and forget this call
+        cs.claim_mode = False
+        cs.cleanup_done = True
+        active_calls.pop(call_control_id, None)
+
+        logger.info(f"✅ Cleanup complete [{call_control_id}]")
+
+
+
+
 CLAIM_NOT_FOUND_TRIGGERS = [
     "i couldn't find any claims",
     "i did not find any claims",
+    "I didn't find any claims on that date",
+    "I did not find any claims on that date",
     "no claims found",
     "there are no claims on that date",
     "no matching claims",
@@ -114,13 +178,6 @@ def is_claim_start(text: str) -> bool:
     low = text.lower()
     return any(t in low for t in CLAIM_START_TRIGGERS)
 
-
-# Global state management
-active_calls: Dict[str, CallState] = {}
-#DEBOUNCE_SECONDS = 0.4  # how long of “quiet” before we treat speech as an utterance
-#0.4 for humana
-#0.4-0.6 for cigna
-#0.1 for boyler scott
 
 
 
@@ -376,18 +433,22 @@ async def handle_call_webhooks(request: Request):
             
         elif event_type == "call.hangup":
             logger.info("🔚 Call ended")
+            call_state.status = "hangup"
+            # Centralized, idempotent cleanup; Telnyx already ended the call → no outbound hangup
+            await ensure_call_cleanup(call_control_id, reason="webhook: call.hangup", send_hangup=False)
 
-            try:
-                await claims_agent.end_session(call_control_id)
-            except Exception:
-                pass
-            if call_state:
-                call_state.claim_mode = False  
-            # Cleanup STT session if exists
-            if call_state.azure_stt_session:
-                stt_manager.remove_session(call_state.websocket_id)
-            # Remove from active calls
-            del active_calls[call_control_id]
+
+            # try:
+            #     await claims_agent.end_session(call_control_id)
+            # except Exception:
+            #     pass
+            # if call_state:
+            #     call_state.claim_mode = False  
+            # # Cleanup STT session if exists
+            # if call_state.azure_stt_session:
+            #     stt_manager.remove_session(call_state.websocket_id)
+            # # Remove from active calls
+            # del active_calls[call_control_id]
             
         elif event_type == "call.streaming.started":
             logger.info("🎵 Streaming started successfully")
@@ -570,19 +631,30 @@ async def media_stream_endpoint(websocket: WebSocket):
                 break
 
     except WebSocketDisconnect:
+        if call_state:
+            call_state.status = "websocket_close"
         logger.info(f" WebSocket disconnected")
+
     except Exception as e:
         logger.error(f" Stream error: {e}")
     finally:
-        # best-effort flush on teardown
+        # Flush any pending STT chunks into one last utterance
         try:
             await _flush_pending_now()
         except Exception:
             pass
 
-        if call_state and call_state.azure_stt_session:
-            stt_manager.remove_session(websocket_id)
-            logger.info(f" STT session cleaned up")
+        # If the socket closed first (common), we do a full cleanup and also send hangup.
+        # If the webhook already ran and removed the call, this will no-op.
+        if call_control_id and call_control_id in active_calls:
+            try:
+                await ensure_call_cleanup(
+                    call_control_id,
+                    reason="websocket: finally/disconnect",
+                    send_hangup=True
+                )
+            except Exception as e:
+                logger.error(f"[{websocket_id}] ensure_call_cleanup error: {e}")
 
 
 
@@ -600,9 +672,10 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
         if is_claim_not_found(text):
-            logger.info("❌ No claims found for this patient. Hanging up.")
-            await hangup_call(call_control_id)
+            logger.info("❌ No claims found for this patient. Ending call.")
+            await ensure_call_cleanup(call_control_id, reason="claims: not found", send_hangup=True)
             return
+
 
         # ENTER claim mode
         if not call_state.claim_mode and is_claim_start(text):
@@ -634,11 +707,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1285144311",
-        customer_id= "H53987455",
-        dob=  "11/9/1949",
-        member_name= "RANDY TREDWAY",
-        dos="7/15/2024"
+        npi= "1407891245",
+        customer_id= "H44918729",
+        dob=  "8/7/1945",
+        member_name= "PAUL HESS",
+        dos="1/23/2025"
     )
 
 
@@ -756,7 +829,10 @@ async def process_llama_response(response: str, call_control_id: str):
     compact = low.replace(" ", "")
     if compact in ("endcall", "end", "hangup"):
         logger.info("→ Hanging up per instruction")
-        await hangup_call(call_control_id)
+        cs = active_calls.get(call_control_id)
+        if cs:
+            cs.status = "hangup"
+        await ensure_call_cleanup(call_control_id, reason="llm: end/hangup command", send_hangup=True)
         return
 
     # 4) Explicit no-response → ignore
@@ -930,21 +1006,9 @@ async def hangup_call(call_control_id: str):
         logger.error(f"❌ Error hanging up call: {str(e)}")
 
 
-# async def hangup_call(call_control_id: str):
-#     """Hangup the call"""
-#     try:
-#         url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/hangup"
-        
-#         async with httpx.AsyncClient() as client:
-#             response = await client.post(url, headers=HEADERS)
-#             logger.info(f"✅ Call hung up: {call_control_id}")
-            
-#     except Exception as e:
-#         logger.error(f"❌ Error hanging up call: {str(e)}")
-
-
 ####   Function to auto hangup calls after a delay
 # This function will be called in the background to auto hangup calls after a delay
+
 
 async def _auto_hangup(call_control_id: str, delay_seconds: int = 900):
     """
@@ -953,44 +1017,19 @@ async def _auto_hangup(call_control_id: str, delay_seconds: int = 900):
     await asyncio.sleep(delay_seconds)
     if call_control_id in active_calls:
         logger.info(f"⌛ Auto-hanging up call {call_control_id} after {delay_seconds} seconds")
-        await hangup_call(call_control_id)
+        await ensure_call_cleanup(call_control_id, reason="auto_hangup", send_hangup=True)
+
 
 claims_agent.register_hangup(hangup_call)
 
 @app.on_event("shutdown")
 async def on_shutdown():
     logger.info("🔌 Shutdown event: hanging up all active calls…")
-    # Hang up any still-active calls
     for call_id in list(active_calls.keys()):
         try:
-            await claims_agent.end_session(call_id)  # NEW: flush claims, if any
-        except Exception:
-            pass
-        try:
-            await hangup_call(call_id)
+            await ensure_call_cleanup(call_id, reason="shutdown", send_hangup=True)
         except Exception as e:
-            logger.error(f"❌ Error hanging up call {call_id}: {e}")
-
-    # Clean up all Azure STT sessions
-    stt_manager.cleanup_all()
-    logger.info("✅ All calls hung up and STT sessions cleaned up. Goodbye!")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    logger.info("🔌 Shutdown event: hanging up all active calls…")
-    # Hang up any still-active calls
-    for call_id in list(active_calls.keys()):
-        try:
-            await claims_agent.end_session(call_id)  # NEW: flush claims, if any
-        except Exception:
-            pass
-        try:
-            await hangup_call(call_id)
-        except Exception as e:
-            logger.error(f"❌ Error hanging up call {call_id}: {e}")
-
-    # Clean up all Azure STT sessions
+            logger.error(f"❌ Cleanup error for {call_id}: {e}")
     stt_manager.cleanup_all()
     logger.info("✅ All calls hung up and STT sessions cleaned up. Goodbye!")
 
