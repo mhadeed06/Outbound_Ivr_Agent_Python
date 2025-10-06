@@ -18,6 +18,7 @@ import re
 import claims_agent
 from insurance_config import config_manager
 from prompt import get_main_prompt_template
+from Data_models import CallState, SimpleCallRequest
 
 
 # Load environment variables
@@ -60,30 +61,30 @@ logger = logging.getLogger(__name__)
 
 
 initiated_events: Dict[str, asyncio.Event] = {}
-@dataclass
-class CallState:
-    """State management for active calls"""
-    call_control_id: str
-    status: str = "initiated"
-    start_time: datetime = field(default_factory=datetime.now)
-    websocket_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    azure_stt_session: Optional[AzureRealtimeSttService] = None
-    conversation_history: list = field(default_factory=list)
-    # NEW: store the IDs we receive
-    agent_id: Optional[str] = None
-    app_id: Optional[str] = None
+# @dataclass
+# class CallState:
+#     """State management for active calls"""
+#     call_control_id: str
+#     status: str = "initiated"
+#     start_time: datetime = field(default_factory=datetime.now)
+#     websocket_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+#     azure_stt_session: Optional[AzureRealtimeSttService] = None
+#     conversation_history: list = field(default_factory=list)
+#     # NEW: store the IDs we receive
+#     agent_id: Optional[str] = None
+#     app_id: Optional[str] = None
 
-    claim_mode: bool = False  # NEW
-        # NEW: dynamic debounce control per call
-    debounce_seconds: float = None  # set in __post_init__
-    need_debounce_reset: bool = False
+#     claim_mode: bool = False  # NEW
+#         # NEW: dynamic debounce control per call
+#     debounce_seconds: float = None  # set in __post_init__
+#     need_debounce_reset: bool = False
 
-    def __post_init__(self):
-        # default to the global baseline
-        if self.debounce_seconds is None:
-            self.debounce_seconds = config_manager.get_debounce_seconds()
-            print("debounce secs")
-            print(self.debounce_seconds )
+#     def __post_init__(self):
+#         # default to the global baseline
+#         if self.debounce_seconds is None:
+#             self.debounce_seconds = config_manager.get_debounce_seconds()
+#             print("debounce secs")
+#             print(self.debounce_seconds )
 
 
 
@@ -182,11 +183,11 @@ def is_claim_start(text: str) -> bool:
 
 
 
-class SimpleCallRequest(BaseModel):
-    agent_id: str
-    app_id: str
-    # 0 = don’t wait; default wait 2s for webhook to flip to "initiated"
-    wait_for_initiated_ms: int | None = 2000
+# class SimpleCallRequest(BaseModel):
+#     agent_id: str
+#     app_id: str
+#     # 0 = don’t wait; default wait 2s for webhook to flip to "initiated"
+#     wait_for_initiated_ms: int | None = 2000
 
 
 
@@ -315,87 +316,6 @@ async def orchestrate_call_simple(request: Request, wait_for_initiated_ms: int =
             {"error": "Internal error starting call; check server logs"},
             status_code=500
         )
-
-
-
-
-# @app.post("/start_call")
-# async def start_outbound_call():
-#     """Start an outbound call with Azure STT streaming"""
-#     try:
-#         call_payload = {
-#             "to": TEL_TO,
-#             "from": TEL_FROM,
-#             "connection_id": CALL_CONTROL_APP_ID,
-#             "webhook_url": f"{WEBHOOK_BASE_URL}/webhooks/calls",
-#             "webhook_url_method": "POST",
-#             "stream_url": f"{STREAM_BASE_URL}/stream",
-#             "stream_track": "both_tracks",
-#             "stream_bidirectional_mode": "rtp",
-#             "stream_bidirectional_codec": "PCMU",
-#             "send_silence_when_idle": True
-#         }
-
-#         async with httpx.AsyncClient() as client:
-#             response = await client.post(
-#                 f"{TELNYX_BASE_URL}/calls",
-#                 json=call_payload,
-#                 headers=HEADERS
-#             )
-
-#         # Try to parse JSON, but handle non-JSON bodies
-#         try:
-#             body = response.json()
-#         except Exception as parse_err:
-#             logger.exception("❌ Failed to parse JSON from Telnyx")
-#             return JSONResponse(
-#                 {"error": f"Invalid JSON from Telnyx: {response.text}"},
-#                 status_code=500
-#             )
-
-#         # If Telnyx didn’t return 2xx, surface their error
-#         if not (200 <= response.status_code < 300):
-#             logger.error(f"❌ Telnyx error {response.status_code}: {body!r}")
-#             return JSONResponse(
-#                 {"error": f"Telnyx returned {response.status_code}: {body!r}"},
-#                 status_code=500
-#             )
-
-#         # Success path: extract data
-#         data = body.get("data", {})
-#         call_control_id = data.get("call_control_id")
-#         call_session_id = data.get("call_session_id")
-#         is_alive        = data.get("is_alive")
-
-#         if not call_control_id:
-#             logger.error(f"❌ Missing call_control_id in response: {body!r}")
-#             return JSONResponse(
-#                 {"error": f"Missing call_control_id in Telnyx response: {body!r}"},
-#                 status_code=500
-#             )
-
-#         # Store call state
-#         active_calls[call_control_id] = CallState(call_control_id=call_control_id)
-#                 # 🔔 schedule a 10-minute auto-hangup
-#         asyncio.create_task(_auto_hangup(call_control_id, delay_seconds=900))
-
-#         logger.info(f"✅ Call queued: {call_control_id} (is_alive={is_alive})")
-
-#         return JSONResponse({
-#             "success": True,
-#             "call_control_id": call_control_id,
-#             "call_session_id": call_session_id,
-#             "is_alive": is_alive
-#         })
-
-#     except Exception:
-#         # Log full stack trace
-#         logger.exception("❌ Unexpected error starting outbound call")
-#         return JSONResponse(
-#             {"error": "Internal error starting call; check server logs"},
-#             status_code=500
-#         )
-
 
 
 @app.post("/webhooks/calls")
@@ -707,11 +627,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1407891245",
-        customer_id= "H44918729",
-        dob=  "8/7/1945",
-        member_name= "PAUL HESS",
-        dos="1/23/2025"
+        npi= "1285144311",
+        customer_id= "100099748800",
+        dob=  "8/3/1970",
+        member_name= "INDIA WALKER",
+        dos="4/2/2025"
     )
 
 
