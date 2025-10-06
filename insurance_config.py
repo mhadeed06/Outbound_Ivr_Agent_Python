@@ -44,7 +44,7 @@ INSURANCE_CONFIGS = {
         claims_tail_chars=200,
         prompt_template="BAYLOR_SCOTT_PROMPT_TEMPLATE", 
         claims_prompt_template="BAYLOR_SCOTT_CLAIMS_CONTROLLER_TEMPLATE"
-    )
+    ),
 }
 
 class ConfigManager:

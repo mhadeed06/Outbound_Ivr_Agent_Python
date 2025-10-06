@@ -382,9 +382,6 @@ IVR Message: "{transcript}"
 
 
 
-
-
-
 # Dictionary to map prompt names to templates
 MAIN_PROMPTS = {
     "CIGNA_PROMPT_TEMPLATE": CIGNA_PROMPT_TEMPLATE,
