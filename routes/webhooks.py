@@ -37,7 +37,7 @@ def make_webhooks_router(
             logger.info(f"📞 Call Event: {event_type}")
 
             if call_control_id not in active_calls:
-                logger.warning(f"⚠️ Unknown call ID: {call_control_id}")
+                logger.info(f"Webhook for unknown call (likely already cleaned): {call_control_id}")
                 return JSONResponse({"status": "ok"})
 
             call_state = active_calls[call_control_id]
