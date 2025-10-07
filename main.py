@@ -19,7 +19,10 @@ import claims_agent
 from insurance_config import config_manager
 from prompt import get_main_prompt_template
 from Data_models import CallState, SimpleCallRequest
-
+from services import telnyx_client
+from routes.orchestrate import make_orchestrate_router
+from routes.webhooks import make_webhooks_router
+from routes.stream import make_stream_router
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -52,6 +55,8 @@ HEADERS = {
 
 app = FastAPI()
 
+
+
 logging.basicConfig(
     level=logging.INFO,  # Use logging.DEBUG for even more detail
     format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -61,31 +66,6 @@ logger = logging.getLogger(__name__)
 
 
 initiated_events: Dict[str, asyncio.Event] = {}
-# @dataclass
-# class CallState:
-#     """State management for active calls"""
-#     call_control_id: str
-#     status: str = "initiated"
-#     start_time: datetime = field(default_factory=datetime.now)
-#     websocket_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-#     azure_stt_session: Optional[AzureRealtimeSttService] = None
-#     conversation_history: list = field(default_factory=list)
-#     # NEW: store the IDs we receive
-#     agent_id: Optional[str] = None
-#     app_id: Optional[str] = None
-
-#     claim_mode: bool = False  # NEW
-#         # NEW: dynamic debounce control per call
-#     debounce_seconds: float = None  # set in __post_init__
-#     need_debounce_reset: bool = False
-
-#     def __post_init__(self):
-#         # default to the global baseline
-#         if self.debounce_seconds is None:
-#             self.debounce_seconds = config_manager.get_debounce_seconds()
-#             print("debounce secs")
-#             print(self.debounce_seconds )
-
 
 
 # Global state management
@@ -181,400 +161,195 @@ def is_claim_start(text: str) -> bool:
 
 
 
+# # ——— STREAMING ENDPOINT ————————————————————————————————————————
+
+# @app.websocket("/stream")
+# async def media_stream_endpoint(websocket: WebSocket):
+#     logger.info("🔗 New WebSocket connection")
+#     await websocket.accept()
+
+#     call_control_id = None
+#     call_state      = None
+#     websocket_id    = str(uuid.uuid4())
+
+#     # ───────── Debounce state (per-connection) ─────────
+#     from types import SimpleNamespace
+#     state = SimpleNamespace(
+#         pending_finals=[],                                  # accumulate final STT chunks here
+#         debounce_task=None,                                 # the timer task we cancel/restart
+#         debounce_time=DEBOUNCE_SECONDS,                  # how long to wait for "silence" before processing
+#     )
+
+#     async def _process_after_quiet():
+#         """
+#         Runs after a short quiet gap. If not cancelled by new audio,
+#         it joins pending final chunks and treats them as one utterance.
+#         """
+#         try:
+#             await asyncio.sleep(state.debounce_time)        # wait for "silence" gap
+#         except asyncio.CancelledError:
+#             return                                          # new speech arrived → timer reset
+
+#         if not state.pending_finals:
+#             return
+
+#         text = " ".join(state.pending_finals).strip()
+#         state.pending_finals.clear()
+#         if not text:
+#             return
+
+#         # optional latency logging
+#         if call_state and hasattr(call_state, "last_media_ts"):
+#             ms = (time.perf_counter() - call_state.last_media_ts) * 1000
+#             logger.info(f" Debounced STT latency: {ms:.0f} ms")
+
+#         # persist and dispatch
+#         if call_state:
+#             call_state.conversation_history.append({"role": "user", "content": text})
+#         await handle_user_speech(text, call_control_id)
+
+#     def _reschedule_debounce():
+#         """Cancel current timer (if any) and start a fresh one."""
+#         if state.debounce_task and not state.debounce_task.done():
+#             state.debounce_task.cancel()
+#         state.debounce_task = asyncio.create_task(_process_after_quiet())
+
+#     async def _flush_pending_now():
+#         """
+#         Force-process whatever we have (used on 'stop' or disconnect) so we
+#         don’t lose the caller’s last utterance.
+#         """
+#         if state.debounce_task and not state.debounce_task.done():
+#             state.debounce_task.cancel()
+
+#         if state.pending_finals:
+#             text = " ".join(state.pending_finals).strip()
+#             state.pending_finals.clear()
+#             if text:
+#                 if call_state and hasattr(call_state, "last_media_ts"):
+#                     ms = (time.perf_counter() - call_state.last_media_ts) * 1000
+#                     logger.info(f" Debounced STT latency (flush): {ms:.0f} ms")
+#                 if call_state:
+#                     call_state.conversation_history.append({"role": "user", "content": text})
+#                 await handle_user_speech(text, call_control_id)
+
+#     # ───────── Azure STT callbacks ─────────
+#     async def on_partial(text: str):
+#         # NEW: sync dynamic debounce (per call)
+#         if call_state:
+#             desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
+#             if state.debounce_time != desired:
+#                 state.debounce_time = desired
+#             if getattr(call_state, "need_debounce_reset", False):
+#                 _reschedule_debounce()
+#                 call_state.need_debounce_reset = False
+
+#         # partials are unstable; we use them only to reset the quiet timer
+#         _reschedule_debounce()
 
 
-# class SimpleCallRequest(BaseModel):
-#     agent_id: str
-#     app_id: str
-#     # 0 = don’t wait; default wait 2s for webhook to flip to "initiated"
-#     wait_for_initiated_ms: int | None = 2000
+#     async def on_final(text: str):
+#         text = text.strip()
+#         if not text:
+#             return
 
+#         # NEW: sync dynamic debounce (per call)
+#         if call_state:
+#             desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
+#             if state.debounce_time != desired:
+#                 state.debounce_time = desired
+#             if getattr(call_state, "need_debounce_reset", False):
+#                 _reschedule_debounce()
+#                 call_state.need_debounce_reset = False
 
+#         # optional: measure time since last inbound audio
+#         if call_state and hasattr(call_state, "last_media_ts"):
+#             ms = (time.perf_counter() - call_state.last_media_ts) * 1000
+#             logger.info(f" STT final piece latency: {ms:.0f} ms")
 
-@app.post("/orchestrate_call_simple")
-async def orchestrate_call_simple(request: Request, wait_for_initiated_ms: int = 10000):
-    """
-    Receive agent_id + app_id, start the Telnyx call (same flow as /start_call),
-    optionally wait briefly for 'call.initiated', then return status.
-    """
-    try:
-        # ── parse body ───────────────────────────────────────────────────────
-        try:
-            
-            incoming = await request.json()
-        except Exception:
-            logger.exception("❌ Invalid JSON body")
-            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+#         state.pending_finals.append(text)  # accumulate stable text
+#         _reschedule_debounce()             # restart quiet timer
 
-        agent_id = incoming.get("agent_id")
-        app_id   = incoming.get("app_id")
+#     async def on_error(err: str):
+#         logger.error(f"[{websocket_id}] STT error: {err}")
 
-        if not agent_id or not app_id:
-            return JSONResponse(
-                {"error": "agent_id and app_id are required"},
-                status_code=400
-            )
+#     # ───────── WebSocket receive loop ─────────
+#     try:
+#         while True:
+#             frame = await websocket.receive_text()
+#             msg   = json.loads(frame)
+#             ev    = msg.get("event")
 
-        # ── same Telnyx call payload as /start_call ─────────────────────────
-        call_payload = {
-            "to": TEL_TO,
-            "from": TEL_FROM,
-            "connection_id": CALL_CONTROL_APP_ID,
-            "webhook_url": f"{WEBHOOK_BASE_URL}/webhooks/calls",
-            "webhook_url_method": "POST",
-            "stream_url": f"{STREAM_BASE_URL}/stream",
-            "stream_track": "both_tracks",
-            "stream_bidirectional_mode": "rtp",
-            "stream_bidirectional_codec": "PCMU",
-            "send_silence_when_idle": True
-        }
+#             if ev == "start":
+#                 call_control_id = msg["start"]["call_control_id"]
+#                 logger.info(f" Call started: {call_control_id}")
 
-        # ── start the call with Telnyx ───────────────────────────────────────
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{TELNYX_BASE_URL}/calls",
-                json=call_payload,
-                headers=HEADERS
-            )
+#                 call_state = active_calls.get(call_control_id)
+#                 if not call_state:
+#                     logger.warning(f" Unknown call ID")
+#                     continue
 
-        # parse Telnyx response safely
-        try:
-            body = response.json()
-        except Exception:
-            logger.exception("❌ Failed to parse JSON from Telnyx")
-            return JSONResponse(
-                {"error": f"Invalid JSON from Telnyx: {response.text}"},
-                status_code=500
-            )
+#                 # allow TTS to send outbound audio on the same socket
+#                 call_state.websocket = websocket
 
-        if not (200 <= response.status_code < 300):
-            logger.error(f"❌ Telnyx error {response.status_code}: {body!r}")
-            return JSONResponse(
-                {"error": f"Telnyx returned {response.status_code}: {body!r}"},
-                status_code=500
-            )
+#                 # create and wire the Azure STT session
+#                 session = stt_manager.create_session(websocket_id)
+#                 call_state.azure_stt_session = session
+#                 session.initialize(
+#                     on_partial_result=on_partial,
+#                     on_final_result=on_final,
+#                     on_error=on_error,
+#                 )
+#                 session.start_continuous_recognition()
+#                 session.start_async_event_handler(asyncio.get_running_loop())
 
-        # ── extract data ─────────────────────────────────────────────────────
-        data = body.get("data", {})
-        call_control_id = data.get("call_control_id")
-        call_session_id = data.get("call_session_id")
-        is_alive        = data.get("is_alive")
+#             elif ev == "media":
+#                 media = msg["media"]
+#                 if media.get("track") == "inbound" and call_state:
+#                     pcm = convert_mulaw_to_pcm(base64.b64decode(media["payload"]))
+#                     call_state.last_media_ts = time.perf_counter()
+#                     if getattr(call_state, "is_tts_active", False):
+#                         pass
+#                     else:
+#                         call_state.azure_stt_session.feed_audio(pcm)
 
-        if not call_control_id:
-            logger.error(f"❌ Missing call_control_id in response: {body!r}")
-            return JSONResponse(
-                {"error": f"Missing call_control_id in Telnyx response: {body!r}"},
-                status_code=500
-            )
-
-        # ── store call state + your two IDs ──────────────────────────────────
-        active_calls[call_control_id] = CallState(
-            call_control_id=call_control_id,
-            agent_id=agent_id,
-            app_id=app_id
-        )
-        asyncio.create_task(_auto_hangup(call_control_id, delay_seconds=900))
-
-        # ── race-proof wait for 'call.initiated' ─────────────────────────────
-        status = "queued"
-        if (wait_for_initiated_ms or 0) > 0:
-            # create/reuse the event BEFORE checking status to avoid race
-            ev = initiated_events.setdefault(call_control_id, asyncio.Event())
-
-            # if webhook already flipped status, set event now
-            cs = active_calls.get(call_control_id)
-            if cs and getattr(cs, "status", None) == "initiated":
-                ev.set()
-
-            try:
-                await asyncio.wait_for(
-                    ev.wait(),
-                    timeout=(wait_for_initiated_ms / 1000.0)
-                )
-                status = "initiated"
-            except asyncio.TimeoutError:
-                status = "queued"  # fallback after timeout
-            finally:
-                initiated_events.pop(call_control_id, None)
-
-        logger.info(f"✅ Call queued: {call_control_id} (is_alive={is_alive}) status={status}")
-
-        # ── response ─────────────────────────────────────────────────────────
-        return JSONResponse({
-            "success": True,
-            "status": status,
-            "agent_id": agent_id,
-            "app_id": app_id,
-            "call_control_id": call_control_id,
-            "call_session_id": call_session_id,
-            "is_alive": is_alive
-        })
-
-    except Exception:
-        logger.exception("❌ Unexpected error orchestrating call")
-        return JSONResponse(
-            {"error": "Internal error starting call; check server logs"},
-            status_code=500
-        )
-
-
-@app.post("/webhooks/calls")
-async def handle_call_webhooks(request: Request):
-    """Handle Telnyx call control webhooks"""
-    try:
-        body = await request.json()
-        data = body.get("data", {})
-        event_type = data.get("event_type")
-        payload = data.get("payload", {})
-        call_control_id = payload.get("call_control_id")
-        
-        logger.info(f"📞 Call Event: {event_type}")
-        
-        if call_control_id not in active_calls:
-            logger.warning(f"⚠️ Unknown call ID: {call_control_id}")
-            return JSONResponse({"status": "ok"})
-            
-        call_state = active_calls[call_control_id]
-        
-        if event_type == "call.initiated":
-            logger.info("📞 Call initiated")
-            call_state.status = "initiated"
-            if call_control_id in initiated_events:
-                initiated_events[call_control_id].set()
-
-            
-        elif event_type == "call.ringing":
-            logger.info("🔔 Call ringing")
-            call_state.status = "ringing"
-            
-        elif event_type == "call.answered":
-            logger.info("✅ Call answered - Media streaming should start automatically")
-            call_state.status = "answered"
-            
-        elif event_type == "call.hangup":
-            logger.info("🔚 Call ended")
-            call_state.status = "hangup"
-            # Centralized, idempotent cleanup; Telnyx already ended the call → no outbound hangup
-            await ensure_call_cleanup(call_control_id, reason="webhook: call.hangup", send_hangup=False)
-
-
-            # try:
-            #     await claims_agent.end_session(call_control_id)
-            # except Exception:
-            #     pass
-            # if call_state:
-            #     call_state.claim_mode = False  
-            # # Cleanup STT session if exists
-            # if call_state.azure_stt_session:
-            #     stt_manager.remove_session(call_state.websocket_id)
-            # # Remove from active calls
-            # del active_calls[call_control_id]
-            
-        elif event_type == "call.streaming.started":
-            logger.info("🎵 Streaming started successfully")
-            
-        elif event_type == "call.streaming.stopped":
-            logger.info("🎵 Streaming stopped")
-            
-        else:
-            logger.info(f"📌 Unhandled event: {event_type}")
-            
-        return JSONResponse({"status": "ok"})
-        
-    except Exception as e:
-        logger.error(f"❌ Error handling webhook: {str(e)}")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ——— STREAMING ENDPOINT ————————————————————————————————————————
-
-@app.websocket("/stream")
-async def media_stream_endpoint(websocket: WebSocket):
-    logger.info("🔗 New WebSocket connection")
-    await websocket.accept()
-
-    call_control_id = None
-    call_state      = None
-    websocket_id    = str(uuid.uuid4())
-
-    # ───────── Debounce state (per-connection) ─────────
-    from types import SimpleNamespace
-    state = SimpleNamespace(
-        pending_finals=[],                                  # accumulate final STT chunks here
-        debounce_task=None,                                 # the timer task we cancel/restart
-        debounce_time=DEBOUNCE_SECONDS,                  # how long to wait for "silence" before processing
-    )
-
-    async def _process_after_quiet():
-        """
-        Runs after a short quiet gap. If not cancelled by new audio,
-        it joins pending final chunks and treats them as one utterance.
-        """
-        try:
-            await asyncio.sleep(state.debounce_time)        # wait for "silence" gap
-        except asyncio.CancelledError:
-            return                                          # new speech arrived → timer reset
-
-        if not state.pending_finals:
-            return
-
-        text = " ".join(state.pending_finals).strip()
-        state.pending_finals.clear()
-        if not text:
-            return
-
-        # optional latency logging
-        if call_state and hasattr(call_state, "last_media_ts"):
-            ms = (time.perf_counter() - call_state.last_media_ts) * 1000
-            logger.info(f" Debounced STT latency: {ms:.0f} ms")
-
-        # persist and dispatch
-        if call_state:
-            call_state.conversation_history.append({"role": "user", "content": text})
-        await handle_user_speech(text, call_control_id)
-
-    def _reschedule_debounce():
-        """Cancel current timer (if any) and start a fresh one."""
-        if state.debounce_task and not state.debounce_task.done():
-            state.debounce_task.cancel()
-        state.debounce_task = asyncio.create_task(_process_after_quiet())
-
-    async def _flush_pending_now():
-        """
-        Force-process whatever we have (used on 'stop' or disconnect) so we
-        don’t lose the caller’s last utterance.
-        """
-        if state.debounce_task and not state.debounce_task.done():
-            state.debounce_task.cancel()
-
-        if state.pending_finals:
-            text = " ".join(state.pending_finals).strip()
-            state.pending_finals.clear()
-            if text:
-                if call_state and hasattr(call_state, "last_media_ts"):
-                    ms = (time.perf_counter() - call_state.last_media_ts) * 1000
-                    logger.info(f" Debounced STT latency (flush): {ms:.0f} ms")
-                if call_state:
-                    call_state.conversation_history.append({"role": "user", "content": text})
-                await handle_user_speech(text, call_control_id)
-
-    # ───────── Azure STT callbacks ─────────
-    async def on_partial(text: str):
-        # NEW: sync dynamic debounce (per call)
-        if call_state:
-            desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
-            if state.debounce_time != desired:
-                state.debounce_time = desired
-            if getattr(call_state, "need_debounce_reset", False):
-                _reschedule_debounce()
-                call_state.need_debounce_reset = False
-
-        # partials are unstable; we use them only to reset the quiet timer
-        _reschedule_debounce()
-
-
-    async def on_final(text: str):
-        text = text.strip()
-        if not text:
-            return
-
-        # NEW: sync dynamic debounce (per call)
-        if call_state:
-            desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
-            if state.debounce_time != desired:
-                state.debounce_time = desired
-            if getattr(call_state, "need_debounce_reset", False):
-                _reschedule_debounce()
-                call_state.need_debounce_reset = False
-
-        # optional: measure time since last inbound audio
-        if call_state and hasattr(call_state, "last_media_ts"):
-            ms = (time.perf_counter() - call_state.last_media_ts) * 1000
-            logger.info(f" STT final piece latency: {ms:.0f} ms")
-
-        state.pending_finals.append(text)  # accumulate stable text
-        _reschedule_debounce()             # restart quiet timer
-
-    async def on_error(err: str):
-        logger.error(f"[{websocket_id}] STT error: {err}")
-
-    # ───────── WebSocket receive loop ─────────
-    try:
-        while True:
-            frame = await websocket.receive_text()
-            msg   = json.loads(frame)
-            ev    = msg.get("event")
-
-            if ev == "start":
-                call_control_id = msg["start"]["call_control_id"]
-                logger.info(f" Call started: {call_control_id}")
-
-                call_state = active_calls.get(call_control_id)
-                if not call_state:
-                    logger.warning(f" Unknown call ID")
-                    continue
-
-                # allow TTS to send outbound audio on the same socket
-                call_state.websocket = websocket
-
-                # create and wire the Azure STT session
-                session = stt_manager.create_session(websocket_id)
-                call_state.azure_stt_session = session
-                session.initialize(
-                    on_partial_result=on_partial,
-                    on_final_result=on_final,
-                    on_error=on_error,
-                )
-                session.start_continuous_recognition()
-                session.start_async_event_handler(asyncio.get_running_loop())
-
-            elif ev == "media":
-                media = msg["media"]
-                if media.get("track") == "inbound" and call_state:
-                    pcm = convert_mulaw_to_pcm(base64.b64decode(media["payload"]))
-                    call_state.last_media_ts = time.perf_counter()
-                    if getattr(call_state, "is_tts_active", False):
-                        pass
-                    else:
-                        call_state.azure_stt_session.feed_audio(pcm)
-
-            elif ev == "stop":
-                logger.info(f" Stream stopped")
-                await _flush_pending_now()  # process last utterance, if any
-                try:
-                    await claims_agent.end_session(call_control_id)
-                except Exception:
-                    pass   
-                if call_state:
-                    call_state.claim_mode = False   # NEW
+#             elif ev == "stop":
+#                 logger.info(f" Stream stopped")
+#                 await _flush_pending_now()  # process last utterance, if any
+#                 try:
+#                     await claims_agent.end_session(call_control_id)
+#                 except Exception:
+#                     pass   
+#                 if call_state:
+#                     call_state.claim_mode = False   # NEW
           
-                break
+#                 break
 
-    except WebSocketDisconnect:
-        if call_state:
-            call_state.status = "websocket_close"
-        logger.info(f" WebSocket disconnected")
+#     except WebSocketDisconnect:
+#         if call_state:
+#             call_state.status = "websocket_close"
+#         logger.info(f" WebSocket disconnected")
 
-    except Exception as e:
-        logger.error(f" Stream error: {e}")
-    finally:
-        # Flush any pending STT chunks into one last utterance
-        try:
-            await _flush_pending_now()
-        except Exception:
-            pass
+#     except Exception as e:
+#         logger.error(f" Stream error: {e}")
+#     finally:
+#         # Flush any pending STT chunks into one last utterance
+#         try:
+#             await _flush_pending_now()
+#         except Exception:
+#             pass
 
-        # If the socket closed first (common), we do a full cleanup and also send hangup.
-        # If the webhook already ran and removed the call, this will no-op.
-        if call_control_id and call_control_id in active_calls:
-            try:
-                await ensure_call_cleanup(
-                    call_control_id,
-                    reason="websocket: finally/disconnect",
-                    send_hangup=True
-                )
-            except Exception as e:
-                logger.error(f"[{websocket_id}] ensure_call_cleanup error: {e}")
+#         # If the socket closed first (common), we do a full cleanup and also send hangup.
+#         # If the webhook already ran and removed the call, this will no-op.
+#         if call_control_id and call_control_id in active_calls:
+#             try:
+#                 await ensure_call_cleanup(
+#                     call_control_id,
+#                     reason="websocket: finally/disconnect",
+#                     send_hangup=True
+#                 )
+#             except Exception as e:
+#                 logger.error(f"[{websocket_id}] ensure_call_cleanup error: {e}")
 
 
 
@@ -627,11 +402,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1285144311",
-        customer_id= "100099748800",
-        dob=  "8/3/1970",
-        member_name= "INDIA WALKER",
-        dos="4/2/2025"
+        npi= "1407891245",
+        customer_id= "H44918729",
+        dob=  "8/7/1945",
+        member_name= "PAUL HESS",
+        dos="1/23/2025"
     )
 
 
@@ -767,18 +542,12 @@ async def process_llama_response(response: str, call_control_id: str):
 async def send_dtmf(digits: str, call_control_id: str):
     """Send DTMF tones to the call (digits already sanitized by caller)."""
     try:
-        url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/send_dtmf"
-        payload = {
-            "digits": "".join(ch for ch in digits if ch.isdigit() or ch in "*#"),
-            "duration_millis": 400,
-            "inter_digit_duration_millis": 300
-        }
-        async with httpx.AsyncClient() as client:
-            await client.post(url, json=payload, headers=HEADERS)
-        logger.info(f"✅ DTMF sent: {payload['digits']}")
+        cleaned = "".join(ch for ch in digits if ch.isdigit() or ch in "*#")
+        # If you need durations, we can extend telnyx_client to accept them.
+        await telnyx_client.send_dtmf(call_control_id, cleaned, TELNYX_BASE_URL, HEADERS)
+        logger.info(f"✅ DTMF sent: {cleaned}")
     except Exception as e:
         logger.error(f"❌ Error sending DTMF: {str(e)}")
-
 
 
 
@@ -916,12 +685,8 @@ claims_agent.register_tts(speak_with_azure)
 async def hangup_call(call_control_id: str):
     """Hangup the call"""
     try:
-        url = f"{TELNYX_BASE_URL}/calls/{call_control_id}/actions/hangup"
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=HEADERS)
-            logger.info(f"✅ Call hung up: {call_control_id}")
-            
+        await telnyx_client.hangup(call_control_id, TELNYX_BASE_URL, HEADERS)
+        logger.info(f"✅ Call hung up: {call_control_id}")
     except Exception as e:
         logger.error(f"❌ Error hanging up call: {str(e)}")
 
@@ -941,6 +706,46 @@ async def _auto_hangup(call_control_id: str, delay_seconds: int = 900):
 
 
 claims_agent.register_hangup(hangup_call)
+
+# Mount the orchestrate router (uses the SAME shared state/funcs from main.py)
+app.include_router(
+    make_orchestrate_router(
+        active_calls,
+        initiated_events,
+        TELNYX_BASE_URL=TELNYX_BASE_URL,
+        HEADERS=HEADERS,
+        TEL_FROM=TEL_FROM,
+        CALL_CONTROL_APP_ID=CALL_CONTROL_APP_ID,
+        WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
+        STREAM_BASE_URL=STREAM_BASE_URL,
+        auto_hangup_fn=_auto_hangup,
+    )
+)
+
+# NEW: mount webhooks router (pass the SAME live state + cleanup fn)
+app.include_router(
+    make_webhooks_router(
+        active_calls,
+        initiated_events,
+        ensure_call_cleanup=ensure_call_cleanup,
+    )
+)
+
+# after you define: ensure_call_cleanup, handle_user_speech, etc.
+
+app.include_router(
+    make_stream_router(
+        active_calls=active_calls,
+        DEBOUNCE_SECONDS=DEBOUNCE_SECONDS,
+        stt_manager=stt_manager,
+        convert_mulaw_to_pcm=convert_mulaw_to_pcm,
+        claims_agent=claims_agent,
+        ensure_call_cleanup=ensure_call_cleanup,
+        handle_user_speech=handle_user_speech,
+    )
+)
+
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
