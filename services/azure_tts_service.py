@@ -89,6 +89,13 @@ async def speak_with_azure(
     if not ws:
         logger.error("No WebSocket found for TTS")
         return
+    
+    try:
+        if call_state is not None:
+            call_state.conversation_history.append({"role": "assistant", "content": text})
+        
+    except Exception as e:
+        logger.error(f"Error appending to conversation history: {e}")
 
     if not hasattr(call_state, "tts_lock"):
         call_state.tts_lock = asyncio.Lock()

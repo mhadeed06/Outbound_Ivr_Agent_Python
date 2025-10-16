@@ -161,10 +161,10 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         transcript=transcript,
         tax_id="833613394",
         npi= "1407891245",
-        customer_id= "H44918729",
-        dob=  "8/7/1945",
-        member_name= "PAUL HESS",
-        dos="1/23/2025"
+        customer_id= "102775279",
+        dob=  "4/14/1990",
+        member_name= "JACOB RITTIMANN",
+        dos="5/08/2025"
     )
 
 

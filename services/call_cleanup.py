@@ -59,9 +59,12 @@ async def ensure_call_cleanup(
             except Exception as e:
                 logger.warning(f"[{call_control_id}] hangup_call error (ignored): {e}")
 
+        
+
         # 4️⃣ clear flags and forget this call
         cs.claim_mode = False
         cs.cleanup_done = True
+
         active_calls.pop(call_control_id, None)
 
         logger.info(f"✅ Cleanup complete [{call_control_id}]")
