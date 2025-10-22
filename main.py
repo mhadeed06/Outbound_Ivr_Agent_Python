@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-from azure_stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
+from services.azure_stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from pydantic import BaseModel
 import re
 from functools import partial
@@ -16,7 +16,7 @@ from functools import partial
 import claims_agent
 from insurance_config import config_manager
 from prompt import get_main_prompt_template
-from Data_models import CallState, SimpleCallRequest
+from data_models import CallState, SimpleCallRequest
 from services import telnyx_client
 from routes.orchestrate import make_orchestrate_router
 from routes.webhooks import make_webhooks_router

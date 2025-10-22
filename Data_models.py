@@ -15,7 +15,7 @@ from insurance_config import config_manager
 
 if TYPE_CHECKING:
     # Only for type hints (prevents runtime circular imports)
-    from azure_stt_service import AzureRealtimeSttService
+    from services.azure_stt_service import AzureRealtimeSttService
 
 
 # ⬇️ SAME as in your original main.py
