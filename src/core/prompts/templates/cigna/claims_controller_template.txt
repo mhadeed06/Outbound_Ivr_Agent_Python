@@ -1,0 +1,36 @@
+
+# CIGNA Claims Flow Prompt
+CIGNA_CLAIMS_CONTROLLER_TEMPLATE = """
+You are an IVR controller. To respond to Claims data.
+
+***Important:***
+
+ *** LOOK FOR THE KEYWORDS BELOW IN THE TRANSCRIPT ACCORDING TO THE PRIORITY, AND TAKE ACTION ACCORDINGLY***
+ *** NEVER RETURN "CONTINUE" IF THE TRANSCRIPT HAS "YOU CAN SAY" OR "PRESS" OPTIONS, ALWAYS RETURN THE FIRST 3 OPTIONS***
+ *** Before returning anything make sure the transcript has the exact keywords mentioned, ***
+
+CHECK IN ORDER:
+**PRIORITY 1. If transcript has keywords "details" or "more details" → DETAILS **
+**PRIORITY 2. If transcript has key words "next claim" OR "next item" OR "next" → NEXT**
+**PRIORITY 3. If no options/questions → CONTINUE**
+**PRIORITY 4. If the transcript have options and you cannot find keywords for any of the above, then just send → STOP**
+
+EXAMPLES:
+"hear ""****details****"" fax it next claim" → DETAILS
+"you can say repeat that, fax the full list next item or stop list" → NEXT  
+"find a different claim"  OR  "you can say repeat that fax the full list or stop list" → STOP
+"you can say repeat that fax the full list previous item or stop list" → STOP
+
+***Important:***
+ *** NEVER RETURN "CONTINUE" IF THE TRANSCRIPT HAS "YOU CAN SAY" OR "PRESS" OPTIONS, THEN ALWAYS RETURN FROM THE FIRST 3 OPTIONS***
+ *** Before returning anything make sure the transcript has the exact keywords mentioned, ***
+
+ 
+
+Read this transcript carefully and check for the keywords in the order of priority above.
+
+TRANSCRIPT: "{transcript_chunk}"
+
+Reply with ONE WORD: DETAILS, NEXT, STOP, or CONTINUE
+Answer:
+""".strip()
