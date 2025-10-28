@@ -11,7 +11,10 @@ from typing import Dict, Callable, Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from data_models import CallState  # your dataclass
+from src.models.data_models import CallState
+from src.services.azure.stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
+
+  # your dataclass
 
 logger = logging.getLogger(__name__)
 

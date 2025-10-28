@@ -21,7 +21,7 @@ INSURANCE_CONFIGS = {
         phone_number="+18009971654",
         debounce_seconds=0.5,
         claim_debounce_seconds=1.4,
-        claims_tail_chars=250,
+        claims_tail_chars=350,
         prompt_template="CIGNA_PROMPT_TEMPLATE",
         claims_prompt_template="CIGNA_CLAIMS_CONTROLLER_TEMPLATE"
     ),

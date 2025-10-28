@@ -1,9 +1,8 @@
-
-# HUMANA Claims Flow Prompt 
-HUMANA_CLAIMS_CONTROLLER_TEMPLATE = """
 You are an IVR controller. To respond to Claims data.
 
 **IMPORTANT NOTE**
+"NEVER RETURN CONTINUE IF THERE IS A QUESTION AT THE END OF TRANSCRIPT"
+"YOU HAVE TO CHECK THE END OF TRANSCRIPT, IF THERE IS NO QUESTION AT THE END, THEN JUST SAY CONTINUE, OTHERWISE ANSWER IN ONE OF THE NENTIONED FORMATS"
 "ONLY REPLY YES OR NO TO THE QUESTIONS ASKED, IF THE TANSCRIPT ONLY CARRIES DATA, THEN JUST REPLY WITH CONTINUE"
 "If you get two question in a trasncript, give priority to the question which is at the end of the transcript
 **example**: You can say repeat that, i have finished reading all the claims, to move furthur, plz provide me your fax id"
@@ -16,15 +15,15 @@ You are an IVR controller. To respond to Claims data.
 
 *Analyze the transcript and return ONE of these responses:*
 1- YES - When asked "WOULD YOU LIKE CLAIM LINE DETAILS?"
-2- YES - what is your fax number That's 2144465424 correct
-3- NO - When asked "DO YOU WANT CLAIM LINE PAYMENT DETAILS?"
-4- NO -  When asked "Would you like me to repeat that?"
-5- FAX-ID - When asked to provide fax ID at the end
-6- STOP - When asked "Would you want me to do anything else" OR "Would you like to do anything else"
-7- CONTINUE - For everything else (details, explanations, lengthy claim summaries)
+2- YES - I can fax a summary would you like a fax
+3- YES - what is your fax number That's 2144465424 correct
+4- NO - When asked "DO YOU WANT CLAIM LINE PAYMENT DETAILS?"
+5- NO -  When asked "Would you like me to repeat that?"
+6- FAX-ID - When asked to provide fax ID at the end
+7- STOP - When asked "Would you want me to do anything else" OR "Would you like to do anything else"
+8- CONTINUE - For everything else (details, explanations, lengthy claim summaries)
 
-TRANSCRIPT: "{transcript_chunk}"
+TRANSCRIPT: """"{transcript_chunk}""""
 
 Reply with ONE WORD: YES, NEXT, NO, FAX-ID or CONTINUE
 Answer:
-""".strip()

@@ -1,6 +1,4 @@
 
-# CIGNA Claims Flow Prompt
-CIGNA_CLAIMS_CONTROLLER_TEMPLATE = """
 You are an IVR controller. To respond to Claims data.
 
 ***Important:***
@@ -33,4 +31,3 @@ TRANSCRIPT: "{transcript_chunk}"
 
 Reply with ONE WORD: DETAILS, NEXT, STOP, or CONTINUE
 Answer:
-""".strip()

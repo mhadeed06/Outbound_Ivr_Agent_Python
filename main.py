@@ -8,27 +8,27 @@ from typing import Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-from services.azure_stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
+from src.services.azure.stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from pydantic import BaseModel
 import re
 from functools import partial
 #from prompt import PROMPT_TEMPLATE
-import claims_agent
-from insurance_config import config_manager
-from prompt import get_main_prompt_template
-from data_models import CallState, SimpleCallRequest
-from services import telnyx_client
-from routes.orchestrate import make_orchestrate_router
-from routes.webhooks import make_webhooks_router
-from routes.stream import make_stream_router
+import src.core.agents.claims_agent as claims_agent
+from src.config.insurance_config import config_manager
+from src.core.prompts.manager import get_main_prompt_template
+from src.models.data_models import CallState, SimpleCallRequest
+import src.services.telnyx.client as telnyx_client
+from src.api.v1.orchestrate import make_orchestrate_router
+from src.api.v1.webhooks import make_webhooks_router
+from src.api.v1.stream import make_stream_router
 #from services.azure_tts_service import speak_with_azure
-from services.azure_tts_service import speak_with_azure as _speak_with_azure
-from services.llm_service import _call_llama_api, _process_llama_response
-from services.claims_helpers import is_claim_not_found, is_claim_start
-from services.call_lifecycle import hangup_call, auto_hangup
-from services.call_lifecycle import hangup_call as _hangup_call
+from src.services.azure.tts_service import speak_with_azure as _speak_with_azure
+from src.services.llm_service import _call_llama_api, _process_llama_response
+from src.services.claims_helpers import is_claim_not_found, is_claim_start
+from src.services.call_lifecycle import hangup_call, auto_hangup
+from src.services.call_lifecycle import hangup_call as _hangup_call
 
-from services.call_cleanup import ensure_call_cleanup as _ensure_call_cleanup
+from src.services.call_cleanup import ensure_call_cleanup as _ensure_call_cleanup
 
 
 
@@ -161,10 +161,10 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         transcript=transcript,
         tax_id="833613394",
         npi= "1407891245",
-        customer_id= "102775279",
-        dob=  "4/14/1990",
-        member_name= "JACOB RITTIMANN",
-        dos="5/08/2025"
+        customer_id= "H44918729",
+        dob=  "8/7/1945",
+        member_name= "PAUL HESS",
+        dos="1/23/2025"
     )
 
 

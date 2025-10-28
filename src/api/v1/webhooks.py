@@ -8,7 +8,7 @@ from typing import Dict, Callable, Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from data_models import CallState
+from src.models.data_models import CallState
 
 logger = logging.getLogger(__name__)
 

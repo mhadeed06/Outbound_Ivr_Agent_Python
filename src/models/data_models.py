@@ -11,11 +11,11 @@ from typing import Optional, List, TYPE_CHECKING
 from pydantic import BaseModel
 import uuid
 
-from insurance_config import config_manager
+from src.config.insurance_config import config_manager
 
 if TYPE_CHECKING:
     # Only for type hints (prevents runtime circular imports)
-    from services.azure_stt_service import AzureRealtimeSttService
+    from src.services.azure.stt_service import AzureRealtimeSttService
 
 
 # ⬇️ SAME as in your original main.py

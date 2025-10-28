@@ -7,31 +7,40 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# ---- core HTTP call (dependency-injected URL) ----
+
 async def _call_llama_api(prompt: str, *, url: str) -> str:
     """
     Core LLM call. URL is injected from main via partial.
     Returns the 'response' field or '(no response)' on error.
     """
+
     payload = {
         "doctor_query": prompt,
         "role": "You are an outbound calling agent for insurance IVR handling claim status calls.",
         "max_new_tokens": 100
     }
 
+    # ✅ Log and print what we are sending to LLaMA
+    # logger.info("🧠 Sending prompt to LLaMA:\n%s", prompt)
+    # print("\n\n================ PROMPT SENT TO LLAMA =================")
+    # print(prompt)
+    # print("========================================================\n\n")
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(url, json=payload)
             raw = resp.json()
+
             if resp.status_code == 200:
                 answer = raw.get("response", "(no response)")
-                logger.info(f"🦙 Parsed Llama response: {answer!r}")
+                logger.info(f"🦙 Parsed LLaMA response: {answer!r}")
                 return answer
             else:
-                logger.error(f"❌ Llama API error {resp.status_code}: {raw!r}")
+                logger.error(f"❌ LLaMA API error {resp.status_code}: {raw!r}")
                 return "(no response)"
+
     except Exception as e:
-        logger.error(f"❌ Llama API exception: {e}")
+        logger.error(f"❌ LLaMA API exception: {e}")
         return "(no response)"
 
 

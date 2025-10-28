@@ -5,14 +5,17 @@ import httpx
 import logging
 from typing import Dict, List
 from dotenv import load_dotenv
-from insurance_config import config_manager
-from claims_prompts import get_claims_prompt
+from src.config.insurance_config import config_manager
+from ..prompts.claims_prompts import get_claims_prompt
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is not set")
+    raise RuntimeError(
+        "OPENAI_API_KEY is not set. "
+        "Expected it in OUTBOUND_AZURE_TELNYX/.env or the process environment."
+    )
 
 #CLAIMS_TAIL_CHARS  = 200     ### 250 for CIGNA    ## 150 for humana    ### 200 FOR BUYLER SCOTT
 def get_claims_tail_chars() -> int:
@@ -91,7 +94,7 @@ def _finalize_current(s: Dict):
 async def handle_final(call_id: str, utterance: str):
     """
     Main calls this for EVERY debounced Final while in claim mode.
-    Append -> send tail (last 180 chars) of CURRENT claim to GPT-4o -> act on keyword.
+    Append -> send tail (last N chars) of CURRENT claim to GPT-4o -> act on keyword.
     """
     s = _sessions.get(call_id)
     if not s or not s.get("active"):
@@ -105,7 +108,15 @@ async def handle_final(call_id: str, utterance: str):
         # 2) build transcript and take a small tail for the controller
         full_transcript = " ".join(s["current"])
         tail_chars = get_claims_tail_chars()
-        chunk = full_transcript[-tail_chars:].strip()   ### 250 characters for cigna 
+        chunk = full_transcript[-tail_chars:].strip()   # e.g., 250 chars for Cigna
+
+        # === EXACT TAIL DE-DUPE (new) =======================================
+        last_tail = s.get("last_tail")
+        if last_tail == chunk:
+            logger.debug(f"[{call_id}] Skipping GPT: duplicate tail")
+            return
+        s["last_tail"] = chunk
+        # ====================================================================
 
         # 3) ask GPT for ONE WORD intent
         intent = await _ask_gpt_keyword(call_id, chunk)
@@ -147,11 +158,11 @@ async def handle_final(call_id: str, utterance: str):
                 except Exception:
                     pass
             return
-        
+
         if intent == "FAX-ID":
             if _tts_cb:
                 try:
-                    await _tts_cb("2144465424", call_id) 
+                    await _tts_cb("2144465424", call_id)
                 except Exception:
                     pass
             return
@@ -174,8 +185,12 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
 
     system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
 
+    print("\n========== SYSTEM PROMPT SENT TO GPT ==========\n")
+    print(system_prompt)
+    print("==============================================\n")
+
     # minimal logs: what we send + what we get
-    logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")
+    #logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")
 
     try:
         headers = {
