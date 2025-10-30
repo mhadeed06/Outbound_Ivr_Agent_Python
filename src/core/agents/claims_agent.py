@@ -111,11 +111,11 @@ async def handle_final(call_id: str, utterance: str):
         chunk = full_transcript[-tail_chars:].strip()   # e.g., 250 chars for Cigna
 
         # === EXACT TAIL DE-DUPE (new) =======================================
-        last_tail = s.get("last_tail")
-        if last_tail == chunk:
-            logger.debug(f"[{call_id}] Skipping GPT: duplicate tail")
-            return
-        s["last_tail"] = chunk
+        # last_tail = s.get("last_tail")
+        # if last_tail == chunk:
+        #     logger.debug(f"[{call_id}] Skipping GPT: duplicate tail")
+        #     return
+        # s["last_tail"] = chunk
         # ====================================================================
 
         # 3) ask GPT for ONE WORD intent
@@ -185,9 +185,10 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
 
     system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
 
-    print("\n========== SYSTEM PROMPT SENT TO GPT ==========\n")
-    print(system_prompt)
-    print("==============================================\n")
+    # print("\n========== SYSTEM PROMPT SENT TO GPT ==========\n")
+    # print(system_prompt)
+    # print("==============================================\n")
+    print("Transcript chunk sent to GPT:", transcript_chunk)
 
     # minimal logs: what we send + what we get
     #logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")
@@ -232,7 +233,7 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
         return intent
 
     except Exception as e:
-        logger.error(f"[{call_id}] ← GPT EXC: {e}")
+        logger.exception(f"[{call_id}] ← GPT EXC (chunk_len={len(transcript_chunk)}):")
         return "CONTINUE"
 
 

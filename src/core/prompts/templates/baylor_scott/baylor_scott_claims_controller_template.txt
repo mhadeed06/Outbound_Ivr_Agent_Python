@@ -1,6 +1,4 @@
 
-# BAYLOR SCOTT Claims Flow Prompt
-BAYLOR_SCOTT_CLAIMS_CONTROLLER_TEMPLATE = """
 You are an IVR controller for Baylor Scott Claims flow.
 
 **IMPORTANT NOTE**
@@ -27,4 +25,3 @@ TRANSCRIPT: "{transcript_chunk}"
 
 Reply with ONE RESPONSE: NEXT CLAIM, STOP, or CONTINUE
 Answer:
-""".strip()

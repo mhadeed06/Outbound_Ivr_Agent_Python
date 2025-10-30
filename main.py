@@ -157,14 +157,39 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
 
     prompt_template = get_main_prompt_template()  # Gets correct template for current insurance
+     
+    # Example: BAYLOR SCOOT & WHITE
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     tax_id="833613394",
+    #     npi= "1285144311",
+    #     customer_id= "100099748800",
+    #     dob=  "8/3/1970",
+    #     member_name= "INDIA WALKER",
+    #     dos="4/2/2025"
+    # )
+
+    #    Humana
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     tax_id="833613394",
+    #     npi= "1407891245",
+    #     customer_id= "H44918729",
+    #     dob=  "8/7/1945",
+    #     member_name= "PAUL HESS",
+    #     dos="1/23/2025"
+    # )
+     
+
+    # CIGNA
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1407891245",
-        customer_id= "H44918729",
-        dob=  "8/7/1945",
-        member_name= "PAUL HESS",
-        dos="1/23/2025"
+        npi= "1437285970",
+        customer_id= "102775279",
+        dob=  "4/14/1990",
+        member_name= "JACOB RITTIMANN",
+        dos="6/16/2025"
     )
 
 
