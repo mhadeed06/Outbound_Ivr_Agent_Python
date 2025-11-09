@@ -115,6 +115,10 @@ ensure_call_cleanup = partial(
 # ─── 1. handle_user_speech: decorate transcript into a full prompt ────────────
 
 async def handle_user_speech(transcript: str, call_control_id: str):
+
+    #logger.info(f"🎯 handle_user_speech CALLED with transcript length: {len(transcript)}")
+    #logger.info(f"📝 Whole transcript: {transcript}")
+
     text = transcript.strip()
     if not transcript or len(transcript) < 3:
         logger.warning(f"Transcript too short, skipping")
@@ -137,6 +141,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
             print("dEBOUNCE TIME CHANGES")
             call_state.debounce_seconds = config_manager.get_claim_debounce_seconds()
             call_state.need_debounce_reset = True
+            claim_seg_timeout = config_manager.get_claim_segmentation_silence_ms()
+            call_state.segmentation_silence_ms = claim_seg_timeout
+            if hasattr(call_state, 'azure_stt_session') and call_state.azure_stt_session:
+                call_state.azure_stt_session.update_segmentation_timeout(claim_seg_timeout)
+                logger.info(f"✅ Segmentation timeout changed to {claim_seg_timeout}ms for claims")
 
             await claims_agent.start_session(call_control_id)
             await claims_agent.handle_final(call_control_id, text)  # send first debounced chunk
@@ -152,6 +161,14 @@ async def handle_user_speech(transcript: str, call_control_id: str):
                 call_state.claim_mode = False
                 call_state.debounce_seconds = config_manager.get_debounce_seconds()  # revert to baseline
                 call_state.need_debounce_reset = True
+
+                # NEW: Revert segmentation timeout
+                normal_seg_timeout = config_manager.get_segmentation_silence_ms()
+                call_state.segmentation_silence_ms = normal_seg_timeout
+                if hasattr(call_state, 'azure_stt_session') and call_state.azure_stt_session:
+                    call_state.azure_stt_session.update_segmentation_timeout(normal_seg_timeout)
+                    logger.info(f"✅ Segmentation timeout reverted to {normal_seg_timeout}ms")
+
             return
 
 
@@ -181,7 +198,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     # )
      
 
-    # CIGNA
+    # # CIGNA
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
@@ -191,6 +208,15 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         member_name= "JACOB RITTIMANN",
         dos="6/16/2025"
     )
+
+       # OSCAR
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     tax_id="874546086",
+    #     customer_id= "7618978201",
+    #     npi= "1497595284",
+    #     dos="10/17/2025"
+    # )
 
 
     t0 = time.perf_counter()
@@ -276,6 +302,7 @@ app.include_router(
 )
 
 claims_agent.register_tts(speak_with_azure)
+claims_agent.register_dtmf(send_dtmf)
 
 
 @app.on_event("shutdown")

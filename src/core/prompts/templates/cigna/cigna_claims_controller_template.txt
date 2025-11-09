@@ -8,15 +8,15 @@ You are an IVR controller. To respond to Claims data.
  *** Before returning anything make sure the transcript has the exact keywords mentioned, ***
 
 CHECK IN ORDER:
-**PRIORITY 1. If transcript has keywords "details" or "more details" → DETAILS **
-**PRIORITY 2. If transcript has key words "next claim" OR "next item" OR "next" → NEXT**
-**PRIORITY 3. If no options/questions → CONTINUE**
+**PRIORITY 1. If transcript has keywords "Press 2 for details" or "press 2 for more details" → DETAILS **
+**PRIORITY 2. If transcript has key words "press 3 for next claim" OR "press 3 for next item" OR " 4 next claim" → NEXT**
+**PRIORITY 3. If no options/questions, just the details about the claim → CONTINUE**
 **PRIORITY 4. If the transcript have options and you cannot find keywords for any of the above, then just send → STOP**
 
 EXAMPLES:
-"hear ""****details****"" fax it next claim" → DETAILS
-"you can say repeat that, fax the full list next item or stop list" → NEXT  
-"find a different claim"  OR  "you can say repeat that fax the full list or stop list" → STOP
+"press this to hear ""****details****"" fax it next claim" → DETAILS
+"you can one repeat that three fax it 4 next claim 5 check another date or 6 change patient or seven" → NEXT  
+"find a different claim"  OR  "you can say repeat that fax the full list or check another date or 6 change patient or seven say I'm done with claims to speak with one" → STOP
 "you can say repeat that fax the full list previous item or stop list" → STOP
 
 ***Important:***

@@ -57,7 +57,7 @@ Phase 5: Customer ID OR Social security number Request
     IVR Prompt: "IF THE IVR PROMPT INCLUDES THESE  ***please say the customer ID if the ID or Social Security number does not include letters you can enter it using your telephone keypad**."
     Your Response: value: {customer_id}
 
-    IVR Prompt: "Sorry I didn't get that with the ID you entered U 704-396-0101"
+    IVR Prompt: "Sorry I didn't get that with the ID you entered {customer_id}"  *If the ID given by IVR doesnot match with customer_id, then return say: no
     Your Response: confirm: yes
 
 

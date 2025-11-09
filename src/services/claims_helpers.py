@@ -27,6 +27,7 @@ CLAIM_START_TRIGGERS = [
     "here is the first one",
     "the first one was for service",
     "the first claim",
+    "there is one claim for this date of service",
 ]
 
 def is_claim_start(text: str) -> bool:

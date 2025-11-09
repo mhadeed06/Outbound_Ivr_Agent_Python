@@ -6,6 +6,7 @@ _MAIN_PROMPT_FILES = {
     "CIGNA_PROMPT_TEMPLATE":        "cigna/cigna_prompt_template",
     "HUMANA_PROMPT_TEMPLATE":       "humana/humana_prompt_template",
     "BAYLOR_SCOTT_PROMPT_TEMPLATE": "baylor_scott/baylor_scott_prompt_template",
+    "OSCAR_PROMPT_TEMPLATE": "oscar/oscar_prompt_template",
 }
 
 def get_main_prompt_template() -> str:

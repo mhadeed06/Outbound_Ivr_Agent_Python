@@ -44,9 +44,19 @@ class CallState:
     debounce_seconds: float = None  # set in __post_init__
     need_debounce_reset: bool = False
 
+    segmentation_silence_ms: int = None  # set in __post_init__
+    need_segmentation_reset: bool = False  # NEW: Flag to trigger segmentation update
+
+
     def __post_init__(self):
         # default to the global baseline
         if self.debounce_seconds is None:
             self.debounce_seconds = config_manager.get_debounce_seconds()
             print("debounce secs")
             print(self.debounce_seconds)
+
+        if self.segmentation_silence_ms is None:
+            self.segmentation_silence_ms = config_manager.get_segmentation_silence_ms()
+            print("segmentation silence ms")
+            print(self.segmentation_silence_ms)
+

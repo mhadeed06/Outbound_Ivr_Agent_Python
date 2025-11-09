@@ -13,6 +13,9 @@ class InsuranceConfig:
     claims_tail_chars: int
     prompt_template: str
     claims_prompt_template: str
+    segmentation_silence_ms: int  # NEW: For normal flow
+    claim_segmentation_silence_ms: int  # NEW: For claim flow
+
 
 # All insurance configurations
 INSURANCE_CONFIGS = {
@@ -20,10 +23,12 @@ INSURANCE_CONFIGS = {
         name="CIGNA",
         phone_number="+18009971654",
         debounce_seconds=0.5,
-        claim_debounce_seconds=1.4,
+        claim_debounce_seconds=1.1,
         claims_tail_chars=250,
         prompt_template="CIGNA_PROMPT_TEMPLATE",
-        claims_prompt_template="CIGNA_CLAIMS_CONTROLLER_TEMPLATE"
+        claims_prompt_template="CIGNA_CLAIMS_CONTROLLER_TEMPLATE",
+        segmentation_silence_ms=600,
+        claim_segmentation_silence_ms=2200
     ),
     
     "HUMANA": InsuranceConfig(
@@ -33,17 +38,34 @@ INSURANCE_CONFIGS = {
         claim_debounce_seconds=1.2,
         claims_tail_chars=150,
         prompt_template="HUMANA_PROMPT_TEMPLATE",
-        claims_prompt_template="HUMANA_CLAIMS_CONTROLLER_TEMPLATE"
+        claims_prompt_template="HUMANA_CLAIMS_CONTROLLER_TEMPLATE",
+        segmentation_silence_ms=500,
+        claim_segmentation_silence_ms=1300
     ),
     
     "BAYLOR_SCOTT": InsuranceConfig(
         name="BAYLOR_SCOTT",
         phone_number="+18555727238", 
         debounce_seconds=0.1,
-        claim_debounce_seconds=1.2,
+        claim_debounce_seconds=1.7,
         claims_tail_chars=200,
         prompt_template="BAYLOR_SCOTT_PROMPT_TEMPLATE", 
-        claims_prompt_template="BAYLOR_SCOTT_CLAIMS_CONTROLLER_TEMPLATE"
+        claims_prompt_template="BAYLOR_SCOTT_CLAIMS_CONTROLLER_TEMPLATE",
+        segmentation_silence_ms=600,
+        claim_segmentation_silence_ms=1000
+    ),
+
+    "OSCAR": InsuranceConfig(
+        name="OSCAR",
+        phone_number="+18556722755", 
+        debounce_seconds=0.0,
+        claim_debounce_seconds=1.2,
+        claims_tail_chars=250,
+        prompt_template="OSCAR_PROMPT_TEMPLATE", 
+        claims_prompt_template="OSCAR_CLAIMS_CONTROLLER_TEMPLATE",
+        segmentation_silence_ms=1400,
+        claim_segmentation_silence_ms=1800
+
     ),
 }
 
@@ -83,6 +105,20 @@ class ConfigManager:
     def get_claims_tail_chars(self) -> int:
         """Get claims tail chars for current insurance"""
         return self.current_config.claims_tail_chars
+    
+    def get_insurance_name(self) -> str:
+        """Get current insurance name"""
+        return self.current_config.name  
+    
+    def get_segmentation_silence_ms(self) -> int:
+        """Get segmentation silence timeout for current insurance (normal flow)"""
+        return self.current_config.segmentation_silence_ms
+    
+    def get_claim_segmentation_silence_ms(self) -> int:
+        """Get segmentation silence timeout for current insurance (claim flow)"""
+        return self.current_config.claim_segmentation_silence_ms
+
+
 
 # Global instance
 config_manager = ConfigManager()

@@ -7,6 +7,7 @@ from typing import Dict, List
 from dotenv import load_dotenv
 from src.config.insurance_config import config_manager
 from ..prompts.claims_prompts import get_claims_prompt
+from src.config.insurance_config import config_manager
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ _locks: Dict[str, asyncio.Lock] = {}  # call_id -> asyncio.Lock
 # injected callbacks from main (optional)
 _hangup_cb = None     # async def (call_id: str) -> None
 _tts_cb = None        # async def (text: str, call_id: str) -> None
-
+_dtmf_cb = None        # async def (dtmf: str, call_id: str) -> None
 
 def register_hangup(cb):
     """Main should call this once: claims_agent.register_hangup(hangup_call)"""
@@ -45,6 +46,12 @@ def register_tts(cb):
     """Main must call once: claims_agent.register_tts(speak_with_azure)"""
     global _tts_cb
     _tts_cb = cb
+
+def register_dtmf(cb):
+    """Main should call once: claims_agent.register_dtmf(send_dtmf)"""
+    global _dtmf_cb
+    _dtmf_cb = cb
+
 
 
 def is_active(call_id: str) -> bool:
@@ -105,21 +112,32 @@ async def handle_final(call_id: str, utterance: str):
         # 1) buffer the current claim only
         s["current"].append(utterance)
 
-        # 2) build transcript and take a small tail for the controller
-        full_transcript = " ".join(s["current"])
-        tail_chars = get_claims_tail_chars()
-        chunk = full_transcript[-tail_chars:].strip()   # e.g., 250 chars for Cigna
+                # 2) Decide what to send to GPT based on insurance
+        insurance_name = config_manager.get_insurance_name()
+        if  insurance_name.upper() == "OSCAR":
+            # For Oscar: send ONLY the latest final utterance
+            chunk = utterance.strip()
+        else:
+            # 2) build transcript and take a small tail for the controller for all other insurances
+            full_transcript = " ".join(s["current"])
+            tail_chars = get_claims_tail_chars()
+            chunk = full_transcript[-tail_chars:].strip()   # e.g., 250 chars for Cigna
 
-        # === EXACT TAIL DE-DUPE (new) =======================================
-        # last_tail = s.get("last_tail")
-        # if last_tail == chunk:
-        #     logger.debug(f"[{call_id}] Skipping GPT: duplicate tail")
-        #     return
-        # s["last_tail"] = chunk
-        # ====================================================================
 
         # 3) ask GPT for ONE WORD intent
         intent = await _ask_gpt_keyword(call_id, chunk)
+
+                # 4) Handle DTMF responses FIRST (NEW - add this block)
+        if intent.startswith("DTMF:"):
+            digit = intent.split(":")[1]
+            if _dtmf_cb:
+                try:
+                    await _dtmf_cb(digit, call_id)
+                    logger.info(f"[{call_id}] Sent DTMF: {digit}")
+                except Exception as e:
+                    logger.error(f"[{call_id}] Error sending DTMF: {e}")
+            return
+
 
         # 4) act (STOP > NEXT > DETAILS > CONFIRM/NO > CONTINUE)
         if intent == "STOP":
@@ -238,6 +256,14 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
 
 
 def _map_keyword(upper: str) -> str:
+
+    if "DTMF:" in upper:
+        return upper  # Return as-is: "DTMF:1", "DTMF:2", etc.
+    
+    # Check for single digits (in case LLaMA returns just the number)
+    if upper in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
+        return f"DTMF:{upper}"
+
     if "DETAIL" in upper:
         return "DETAILS"
     if "NEXT" in upper:
