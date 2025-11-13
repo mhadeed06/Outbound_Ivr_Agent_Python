@@ -46,7 +46,7 @@ Step 1: Caller Type
     Response: say: I am a provider      OR    dtmf:2
 
 Step 2: Main Menu
-    IVR asks: "Enrollment status, claim status, benefit details, claims address, authorizations, health services, or network status"
+    IVR asks: "Enrollment status, ***claim status***, benefit details, claims address, authorizations, health services, or network status"
     Response: say:claim status or dtmf:2
 
 Step 3: NPI

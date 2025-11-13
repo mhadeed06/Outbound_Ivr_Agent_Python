@@ -180,10 +180,10 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     #     transcript=transcript,
     #     tax_id="833613394",
     #     npi= "1285144311",
-    #     customer_id= "100099748800",
-    #     dob=  "8/3/1970",
-    #     member_name= "INDIA WALKER",
-    #     dos="4/2/2025"
+    #     customer_id= "100081367501",
+    #     dob=  "1/11/1961",
+    #     member_name= "ROBIN RADCLIFF",
+    #     dos="4/3/2024"
     # )
 
     #    Humana
@@ -199,24 +199,24 @@ async def handle_user_speech(transcript: str, call_control_id: str):
      
 
     # # CIGNA
-    prompt = prompt_template.format(
-        transcript=transcript,
-        tax_id="833613394",
-        npi= "1437285970",
-        customer_id= "102775279",
-        dob=  "4/14/1990",
-        member_name= "JACOB RITTIMANN",
-        dos="6/16/2025"
-    )
-
-       # OSCAR
     # prompt = prompt_template.format(
     #     transcript=transcript,
-    #     tax_id="874546086",
-    #     customer_id= "7618978201",
-    #     npi= "1497595284",
-    #     dos="10/17/2025"
+    #     tax_id="833613394",
+    #     npi= "1437285970",
+    #     customer_id= "102775279",
+    #     dob=  "4/14/1990",
+    #     member_name= "JACOB RITTIMANN",
+    #     dos="6/16/2025"
     # )
+
+       # OSCAR
+    prompt = prompt_template.format(
+        transcript=transcript,
+        tax_id="874546086",
+        customer_id= "7618978201",
+        npi= "1497595284",
+        dos="10/17/2025"
+    )
 
 
     t0 = time.perf_counter()

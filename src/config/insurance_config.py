@@ -23,12 +23,12 @@ INSURANCE_CONFIGS = {
         name="CIGNA",
         phone_number="+18009971654",
         debounce_seconds=0.5,
-        claim_debounce_seconds=1.1,
+        claim_debounce_seconds=1.2,
         claims_tail_chars=250,
         prompt_template="CIGNA_PROMPT_TEMPLATE",
         claims_prompt_template="CIGNA_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=600,
-        claim_segmentation_silence_ms=2200
+        claim_segmentation_silence_ms=1700
     ),
     
     "HUMANA": InsuranceConfig(

@@ -7,6 +7,7 @@ CLAIM_NOT_FOUND_TRIGGERS = [
     "there are no claims on that date",
     "no matching claims",
     "i’m not seeing any claims for that",
+    "I didn't find any claims on that date you can say check another date another member switch provider or for anything else say main menu",
 ]
 def is_claim_not_found(text: str) -> bool:
     return any(phrase in text.lower() for phrase in CLAIM_NOT_FOUND_TRIGGERS)

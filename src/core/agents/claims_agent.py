@@ -60,7 +60,7 @@ def is_active(call_id: str) -> bool:
 
 
 async def start_session(call_id: str):
-    _sessions[call_id] = {"active": True, "current": [], "claims": []}
+    _sessions[call_id] = {"active": True, "current": [], "claims": [], "last_response": "", "full_transcript": []}
     _locks[call_id] = _locks.get(call_id) or asyncio.Lock()
 
 
@@ -111,6 +111,7 @@ async def handle_final(call_id: str, utterance: str):
     async with lock:
         # 1) buffer the current claim only
         s["current"].append(utterance)
+        s["full_transcript"].append(utterance) # For overall transcript
 
                 # 2) Decide what to send to GPT based on insurance
         insurance_name = config_manager.get_insurance_name()
@@ -119,13 +120,17 @@ async def handle_final(call_id: str, utterance: str):
             chunk = utterance.strip()
         else:
             # 2) build transcript and take a small tail for the controller for all other insurances
-            full_transcript = " ".join(s["current"])
+            # full_transcript = " ".join(s["current"])  
+            full_text = " ".join(s["full_transcript"])  # ALL claims combined
             tail_chars = get_claims_tail_chars()
-            chunk = full_transcript[-tail_chars:].strip()   # e.g., 250 chars for Cigna
+            chunk = full_text[-tail_chars:].strip()   # e.g., last 250 chars for Cigna
+
+        last_response = s.get("last_response", "")
 
 
         # 3) ask GPT for ONE WORD intent
-        intent = await _ask_gpt_keyword(call_id, chunk)
+        intent = await _ask_gpt_keyword(call_id, chunk,last_response)
+        s["last_response"] = intent
 
                 # 4) Handle DTMF responses FIRST (NEW - add this block)
         if intent.startswith("DTMF:"):
@@ -191,7 +196,7 @@ async def handle_final(call_id: str, utterance: str):
 
 # ---------- GPT-4o controller (minimal logging) ----------
 
-async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
+async def _ask_gpt_keyword(call_id: str, transcript_chunk: str, last_response: str) -> str:
     """
     Use GPT-4o ('4-o') to return ONE WORD:
     DETAILS, NEXT, STOP, CONFIRM, NO, or CONTINUE.
@@ -201,12 +206,29 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str) -> str:
     
     prompt_template = get_controller_prompt_template()
 
-    system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
+    # Send last_response to ALL insurances
+    # Only CIGNA's prompt template will actually use {last_response}
+    # Other prompts will ignore it (no {last_response} placeholder)
+
+
+    try:
+        system_prompt = prompt_template.format_map({
+            'transcript_chunk': transcript_chunk,
+            'last_response': last_response or ""
+        })
+    except KeyError as e:
+        # Fallback for prompts without {last_response}
+        system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
+
+
 
     # print("\n========== SYSTEM PROMPT SENT TO GPT ==========\n")
     # print(system_prompt)
     # print("==============================================\n")
     print("Transcript chunk sent to GPT:", transcript_chunk)
+    if last_response:
+        print(f"Last response: {last_response}")
+
 
     # minimal logs: what we send + what we get
     #logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")
