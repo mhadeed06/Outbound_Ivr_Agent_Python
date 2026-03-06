@@ -54,7 +54,7 @@ INSURANCE_CONFIGS = {
         segmentation_silence_ms=600,
         claim_segmentation_silence_ms=1000
     ),
-
+    
     "OSCAR": InsuranceConfig(
         name="OSCAR",
         phone_number="+18556722755", 
@@ -65,7 +65,19 @@ INSURANCE_CONFIGS = {
         claims_prompt_template="OSCAR_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=1400,
         claim_segmentation_silence_ms=1800
+    ),
 
+
+    "HEALTH_FIRST": InsuranceConfig(
+        name="HEALTH_FIRST",
+        phone_number="+18882502220", 
+        debounce_seconds=0.1,
+        claim_debounce_seconds=1,
+        claims_tail_chars=200,
+        prompt_template="HEALTH_FIRST_PROMPT_TEMPLATE", 
+        claims_prompt_template="HEALTH_FIRST_CLAIMS_CONTROLLER_TEMPLATE",
+        segmentation_silence_ms=1400,
+        claim_segmentation_silence_ms=1800
     ),
 }
 

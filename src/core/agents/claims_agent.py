@@ -115,7 +115,7 @@ async def handle_final(call_id: str, utterance: str):
 
                 # 2) Decide what to send to GPT based on insurance
         insurance_name = config_manager.get_insurance_name()
-        if  insurance_name.upper() == "OSCAR":
+        if  insurance_name.upper() == "OSCAR"  or insurance_name.upper() == "HEALTH_FIRST":
             # For Oscar: send ONLY the latest final utterance
             chunk = utterance.strip()
         else:

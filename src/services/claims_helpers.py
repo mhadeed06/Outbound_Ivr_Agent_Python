@@ -20,14 +20,12 @@ CLAIM_START_TRIGGERS = [
     "i found three claims",
     "i found four claims",
     "i found five claims",
-    "i found six claims",
-    "i found seven claims",
-    "i found eight claims",
-    "i found nine claims",
     "here's the first one",
     "here is the first one",
     "the first one was for service",
     "the first claim",
+    "please wait for the silence while we locate your claim",
+    "We found the requested claim",
     "there is one claim for this date of service",
 ]
 

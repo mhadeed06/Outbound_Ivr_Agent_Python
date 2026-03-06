@@ -57,9 +57,6 @@ TEL_TO = config_manager.get_phone_number()
 DEBOUNCE_SECONDS = config_manager.get_debounce_seconds()
 CLAIM_DEBOUNCE_SECONDS = config_manager.get_claim_debounce_seconds()
 
-#DEBOUNCE_SECONDS = 0.1  # baseline for cigna
-#CLAIM_DEBOUNCE_SECONDS = 1.2  # when in claim mode for cigna 
-
 
 HEADERS = {
     "Authorization": f"Bearer {TELNYX_API_KEY}",
@@ -67,8 +64,6 @@ HEADERS = {
 }
 
 app = FastAPI()
-
-
 
 logging.basicConfig(
     level=logging.INFO,  # Use logging.DEBUG for even more detail
@@ -199,23 +194,33 @@ async def handle_user_speech(transcript: str, call_control_id: str):
      
 
     # CIGNA
-    prompt = prompt_template.format(
-        transcript=transcript,
-        tax_id="833613394",
-        npi= "1437285970",
-        customer_id= "102775279",
-        dob=  "4/14/1990",
-        member_name= "JACOB RITTIMANN",
-        dos="6/16/2025"
-    )
-
-       # OSCAR
     # prompt = prompt_template.format(
     #     transcript=transcript,
-    #     tax_id="874546086",
-    #     customer_id= "7618978201",
-    #     npi= "1497595284",
-    #     dos="10/17/2025"
+    #     tax_id="833613394",
+    #     npi= "1437285970",
+    #     customer_id= "102775279",
+    #     dob=  "4/14/1990",
+    #     member_name= "JACOB RITTIMANN",
+    #     dos="6/16/2025"
+    # )
+
+       # OSCAR
+    prompt = prompt_template.format(
+        transcript=transcript,
+        tax_id="874546086",
+        customer_id= "7618978201",
+        npi= "1497595284",
+        dos="10/17/2025"
+    )
+    
+
+    # health first
+
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     claim_number= " 0105172504677",
+    #     Member_id= "WY15318S",
+    #     dob= "05/02/1962",
     # )
 
 
@@ -226,9 +231,6 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     logger.info(f"Llama response: {response!r}")
 
     await process_llama_response(response, call_control_id)
-
-
-
 
 
 
