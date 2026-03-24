@@ -1,50 +1,56 @@
 # services/llm_service.py
 from __future__ import annotations
-
+import os
 import httpx
 import logging
 import re
-
+from openai import AsyncAzureOpenAI
 logger = logging.getLogger(__name__)
+from dotenv import load_dotenv
 
+load_dotenv()
 
-async def _call_llama_api(prompt: str, *, url: str) -> str:
+# Initialize client once (do NOT create per request)
+azure_client = AsyncAzureOpenAI(
+    api_key=os.getenv("PTU_API_KEY"),
+    azure_endpoint=os.getenv("PTU_AZURE_ENDPOINT"),
+    api_version=os.getenv("PTU_API_VERSION"),
+)
+
+async def _call_gpt_api(prompt: str) -> str:
     """
-    Core LLM call. URL is injected from main via partial.
-    Returns the 'response' field or '(no response)' on error.
+    Azure GPT call replacing LLaMA.
+    Returns plain text response.
     """
-
-    payload = {
-        "doctor_query": prompt,
-        "role": "You are an outbound calling agent for insurance IVR handling claim status calls.",
-        "max_new_tokens": 100
-    }
-
-    # ✅ Log and print what we are sending to LLaMA
-    # logger.info("🧠 Sending prompt to LLaMA:\n%s", prompt)
-    # print("\n\n================ PROMPT SENT TO LLAMA =================")
-    # print(prompt)
-    # print("========================================================\n\n")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=payload)
-            raw = resp.json()
+        response = await azure_client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4.1"),  # Azure deployment name
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an outbound calling agent for insurance IVR handling claim status calls."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0,
+            max_tokens=20,
+        )
 
-            if resp.status_code == 200:
-                answer = raw.get("response", "(no response)")
-                logger.info(f"🦙 Parsed LLaMA response: {answer!r}")
-                return answer
-            else:
-                logger.error(f"❌ LLaMA API error {resp.status_code}: {raw!r}")
-                return "(no response)"
+
+        answer = response.choices[0].message.content or "(no response)"
+        logger.info(f"🤖 GPT response: {answer!r}")
+        return answer.strip()
 
     except Exception as e:
-        logger.error(f"❌ LLaMA API exception: {e}")
+        logger.error(f"❌ GPT API exception: {e}")
+        raise
         return "(no response)"
 
-
-# ---- text command parsing helpers (unchanged logic) ----
+# ---- text command parsing helper----
 PAUSE_RE = re.compile(r"\s+")
 
 def _normalize(s: str) -> str:

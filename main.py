@@ -23,13 +23,13 @@ from src.api.v1.webhooks import make_webhooks_router
 from src.api.v1.stream import make_stream_router
 #from services.azure_tts_service import speak_with_azure
 from src.services.azure.tts_service import speak_with_azure as _speak_with_azure
-from src.services.llm_service import _call_llama_api, _process_llama_response
+from src.services.llm_service import _call_gpt_api, _process_llama_response
 from src.services.claims_helpers import is_claim_not_found, is_claim_start
 from src.services.call_lifecycle import hangup_call, auto_hangup
 from src.services.call_lifecycle import hangup_call as _hangup_call
 
 from src.services.call_cleanup import ensure_call_cleanup as _ensure_call_cleanup
-
+from src.utils.logging_config import setup_logging
 
 
 
@@ -48,8 +48,7 @@ WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")  # Your server URL
 STREAM_BASE_URL = WEBHOOK_BASE_URL.replace("https://", "wss://")
 AZURE_SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
-LLM_URL = "http://20.172.5.137:9010/api/generate_response/"
-call_llama_api = partial(_call_llama_api, url=LLM_URL)
+os.environ["SSL_KEY_PASSWORD"] = "PEHR$3quelM3d27"
 
 
 TEL_TO = config_manager.get_phone_number()  
@@ -64,11 +63,8 @@ HEADERS = {
 }
 
 app = FastAPI()
+setup_logging()
 
-logging.basicConfig(
-    level=logging.INFO,  # Use logging.DEBUG for even more detail
-    format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +171,10 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     #     transcript=transcript,
     #     tax_id="833613394",
     #     npi= "1285144311",
-    #     customer_id= "100081367501",
-    #     dob=  "1/11/1961",
-    #     member_name= "ROBIN RADCLIFF",
-    #     dos="4/3/2024"
+    #     customer_id= "100099748800",
+    #     dob=  "8/3/1970",
+    #     member_name= "INDIA WALKER",
+    #     dos="4/2/2025"
     # )
 
     #    Humana
@@ -186,32 +182,32 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     #     transcript=transcript,
     #     tax_id="833613394",
     #     npi= "1407891245",
-    #     customer_id= "H44918729",
-    #     dob=  "8/7/1945",
-    #     member_name= "PAUL HESS",
-    #     dos="1/23/2025"
+    #     customer_id= "H70726498",
+    #     dob=  "8/11/1948",
+    #     member_name= "JOYCE TURNER",
+    #     dos="6/11/2025"
     # )
      
 
     # CIGNA
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     tax_id="833613394",
-    #     npi= "1437285970",
-    #     customer_id= "102775279",
-    #     dob=  "4/14/1990",
-    #     member_name= "JACOB RITTIMANN",
-    #     dos="6/16/2025"
-    # )
-
-       # OSCAR
     prompt = prompt_template.format(
         transcript=transcript,
-        tax_id="874546086",
-        customer_id= "7618978201",
-        npi= "1497595284",
-        dos="10/17/2025"
+        tax_id="833613394",
+        npi= "1407891245",
+        customer_id= "36885575",
+        dob=  "10/25/1998",
+        member_name= "BILLY MORROW",
+        dos="7/14/2025"
     )
+
+       # OSCAR
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     tax_id="874546086",
+    #     customer_id= "7618978201",
+    #     npi= "1497595284",
+    #     dos="10/17/2025"
+    # )
     
 
     # health first
@@ -225,10 +221,10 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
 
     t0 = time.perf_counter()
-    response = await call_llama_api(prompt)
-    llama_ms = (time.perf_counter() - t0) * 1000
-    logger.info(f"Llama latency: {llama_ms:.0f} ms")
-    logger.info(f"Llama response: {response!r}")
+    response = await _call_gpt_api(prompt)
+    gpt_ms = (time.perf_counter() - t0) * 1000
+    logger.info(f"GPT latency: {gpt_ms:.0f} ms")
+    logger.info(f"GPT response: {response!r}")
 
     await process_llama_response(response, call_control_id)
 
@@ -270,7 +266,7 @@ app.include_router(
         WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
         STREAM_BASE_URL=STREAM_BASE_URL,
         # Wrap auto_hangup so dependencies are passed automatically
-        auto_hangup_fn=lambda call_id, delay_seconds=900: auto_hangup(
+        auto_hangup_fn=lambda call_id, delay_seconds=1200: auto_hangup(
             call_id,
             active_calls,
             ensure_call_cleanup,
@@ -321,7 +317,11 @@ async def on_shutdown():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    uvicorn.run(app, 
+                host="0.0.0.0",
+                port=9080,
+                reload=False,
+                )
 
 
 #  TO run hit the start_call endpoint

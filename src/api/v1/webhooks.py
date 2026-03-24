@@ -57,16 +57,26 @@ def make_webhooks_router(
                 call_state.status = "answered"
 
             elif event_type == "call.hangup":
-                logger.info("🔚 Call ended")
+                logger.info(
+                f"🔚 Call ended | call_control_id={call_control_id} "
+                f"call_session_id={payload.get('call_session_id')} "
+                f"hangup_cause={payload.get('hangup_cause')} "
+                f"hangup_source={payload.get('hangup_source')}"
+                )
+
                 call_state.status = "hangup"
                 # Centralized, idempotent cleanup; Telnyx already ended the call → no outbound hangup
                 await ensure_call_cleanup(call_control_id, reason="webhook: call.hangup", send_hangup=False)
 
-            elif event_type == "call.streaming.started":
+            elif event_type in ("call.streaming.started", "streaming.started"):
                 logger.info("🎵 Streaming started successfully")
 
-            elif event_type == "call.streaming.stopped":
-                logger.info("🎵 Streaming stopped")
+            elif event_type in ("call.streaming.stopped", "streaming.stopped"):
+                logger.info(
+                    f"🎵 Streaming stopped | call_control_id={call_control_id} "
+                    f"call_session_id={payload.get('call_session_id')} "
+                    f"payload={payload}"
+                )
 
             else:
                 logger.info(f"📌 Unhandled event: {event_type}")

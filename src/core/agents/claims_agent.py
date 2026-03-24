@@ -8,15 +8,16 @@ from dotenv import load_dotenv
 from src.config.insurance_config import config_manager
 from ..prompts.claims_prompts import get_claims_prompt
 from src.config.insurance_config import config_manager
+from src.services.llm_service import _call_gpt_api
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError(
-        "OPENAI_API_KEY is not set. "
-        "Expected it in OUTBOUND_AZURE_TELNYX/.env or the process environment."
-    )
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# if not OPENAI_API_KEY:
+#     raise RuntimeError(
+#         "OPENAI_API_KEY is not set. "
+#         "Expected it in OUTBOUND_AZURE_TELNYX/.env or the process environment."
+#     )
 
 #CLAIMS_TAIL_CHARS  = 200     ### 250 for CIGNA    ## 150 for humana    ### 200 FOR BUYLER SCOTT
 def get_claims_tail_chars() -> int:
@@ -52,17 +53,13 @@ def register_dtmf(cb):
     global _dtmf_cb
     _dtmf_cb = cb
 
-
-
 def is_active(call_id: str) -> bool:
     s = _sessions.get(call_id)
     return bool(s and s.get("active"))
 
-
 async def start_session(call_id: str):
     _sessions[call_id] = {"active": True, "current": [], "claims": [], "last_response": "", "full_transcript": []}
     _locks[call_id] = _locks.get(call_id) or asyncio.Lock()
-
 
 async def end_session(call_id: str, *, already_locked: bool = False):
     s = _sessions.get(call_id)
@@ -89,7 +86,6 @@ def get_claims(call_id: str) -> List[str]:
     s = _sessions.get(call_id) or {}
     return list(s.get("claims", []))
 # If you want one string: "\n\n---\n\n".join(get_claims(call_id))
-
 
 def _finalize_current(s: Dict):
     txt = " ".join(s["current"]).strip()
@@ -200,9 +196,9 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str, last_response: s
     """
     Use GPT-4o ('4-o') to return ONE WORD:
     DETAILS, NEXT, STOP, CONFIRM, NO, or CONTINUE.
-    """
-    if not OPENAI_API_KEY:
-        return "CONTINUE"
+    # """
+    # if not OPENAI_API_KEY:
+    #     return "CONTINUE"
     
     prompt_template = get_controller_prompt_template()
 
@@ -234,54 +230,27 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str, last_response: s
     #logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")
 
     try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": "gpt-4o",  # per your request
-            "messages": [
-                {"role": "system", "content": system_prompt},
-            ],
-            "max_tokens": 4,
-            "temperature": 0,
-            "top_p": 1,
-            "presence_penalty": 0,
-            "frequency_penalty": 0,
-        }
-
         t0 = time.perf_counter()
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                json=payload,
-                headers=headers,
-            )
+        raw = await _call_gpt_api(system_prompt)
         ms = (time.perf_counter() - t0) * 1000
 
-        if resp.status_code != 200:
-            logger.error(f"[{call_id}] ← GPT {resp.status_code}: {resp.text[:180]}")
+        if not raw:
             return "CONTINUE"
-
-        data = resp.json()
-        raw = (data.get("choices", [{}])[0]
-                     .get("message", {})
-                     .get("content", "")).strip()
         intent = _map_keyword(raw.upper())
-
         logger.info(f"[{call_id}] ← GPT: {raw!r} → {intent} ({ms:.0f}ms)")
         return intent
 
     except Exception as e:
-        logger.exception(f"[{call_id}] ← GPT EXC (chunk_len={len(transcript_chunk)}):")
+        logger.exception(
+            f"[{call_id}] GPT failure | transcript_len={len(transcript_chunk)} | last_response={last_response}"
+        )
         return "CONTINUE"
-
 
 def _map_keyword(upper: str) -> str:
 
     if "DTMF:" in upper:
         return upper  # Return as-is: "DTMF:1", "DTMF:2", etc.
-    
+        
     # Check for single digits (in case LLaMA returns just the number)
     if upper in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]:
         return f"DTMF:{upper}"
@@ -299,6 +268,3 @@ def _map_keyword(upper: str) -> str:
     if upper == "NO" or " NO" in upper or upper.startswith("NO") or upper.endswith(" NO"):
         return "NO"
     return "CONTINUE"
-
-    
-
