@@ -48,7 +48,6 @@ async def _call_gpt_api(prompt: str) -> str:
     except Exception as e:
         logger.error(f"❌ GPT API exception: {e}")
         raise
-        return "(no response)"
 
 # ---- text command parsing helper----
 PAUSE_RE = re.compile(r"\s+")

@@ -139,7 +139,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         if not call_state.claim_mode and is_claim_start(text):
             call_state.claim_mode = True
             # NEW: bump debounce while in claims flow
-            print("dEBOUNCE TIME CHANGES")
+            logger.info("Debounce time changed for claims flow")
             call_state.debounce_seconds = config_manager.get_claim_debounce_seconds()
             call_state.need_debounce_reset = True
             claim_seg_timeout = config_manager.get_claim_segmentation_silence_ms()

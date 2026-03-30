@@ -7,7 +7,6 @@ from typing import Dict, List
 from dotenv import load_dotenv
 from src.config.insurance_config import config_manager
 from ..prompts.claims_prompts import get_claims_prompt
-from src.config.insurance_config import config_manager
 from src.services.llm_service import _call_gpt_api
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -86,6 +85,12 @@ async def end_session(call_id: str, *, already_locked: bool = False):
                 call_state = None
         except Exception:
             call_state = None
+
+        # Store finalized claims data and full transcript on call_state
+        if call_state:
+            call_state.finalized_claims = s.get("claims", [])
+            call_state.full_claims_transcript = full_claims_text
+            call_state.raw_full_transcript = raw_full_transcript
 
         conv_lines = []
         if call_state and getattr(call_state, "conversation_history", None):
@@ -182,14 +187,13 @@ async def handle_final(call_id: str, utterance: str):
 
         insurance_name = config_manager.get_insurance_name()
 
-        # This is what the reviewer should see: only the current debounced utterance
-        review_text = utterance
+        # Full transcript for conversation history (what was actually said)
+        full_text = " ".join(s["full_transcript"]).strip()
 
-        # This is what GPT should see
+        # This is what GPT should see (trimmed for context window)
         if insurance_name.upper() in ("OSCAR", "HEALTH_FIRST"):
             chunk = utterance
         else:
-            full_text = " ".join(s["full_transcript"]).strip()
             tail_chars = get_claims_tail_chars()
             chunk = full_text[-tail_chars:].strip()
 
@@ -199,7 +203,7 @@ async def handle_final(call_id: str, utterance: str):
             call_id,
             chunk,
             last_response,
-            review_text=review_text,
+            review_text=full_text,
         )
         s["last_response"] = intent
 
@@ -281,9 +285,9 @@ async def _ask_gpt_keyword(
     except KeyError:
         system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
 
-    print("Transcript chunk sent to GPT:", transcript_chunk)
+    logger.info(f"Transcript chunk sent to GPT: {transcript_chunk}")
     if last_response:
-        print(f"Last response: {last_response}")
+        logger.info(f"Last response: {last_response}")
 
     try:
         t0 = time.perf_counter()

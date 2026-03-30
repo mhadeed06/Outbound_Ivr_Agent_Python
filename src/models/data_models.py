@@ -52,11 +52,7 @@ class CallState:
         # default to the global baseline
         if self.debounce_seconds is None:
             self.debounce_seconds = config_manager.get_debounce_seconds()
-            print("debounce secs")
-            print(self.debounce_seconds)
 
         if self.segmentation_silence_ms is None:
             self.segmentation_silence_ms = config_manager.get_segmentation_silence_ms()
-            print("segmentation silence ms")
-            print(self.segmentation_silence_ms)
 
