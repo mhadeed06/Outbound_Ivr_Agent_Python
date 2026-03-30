@@ -12,12 +12,6 @@ from src.services.llm_service import _call_gpt_api
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# if not OPENAI_API_KEY:
-#     raise RuntimeError(
-#         "OPENAI_API_KEY is not set. "
-#         "Expected it in OUTBOUND_AZURE_TELNYX/.env or the process environment."
-#     )
 
 #CLAIMS_TAIL_CHARS  = 200     ### 250 for CIGNA    ## 150 for humana    ### 200 FOR BUYLER SCOTT
 def get_claims_tail_chars() -> int:
@@ -37,6 +31,11 @@ _locks: Dict[str, asyncio.Lock] = {}  # call_id -> asyncio.Lock
 _hangup_cb = None     # async def (call_id: str) -> None
 _tts_cb = None        # async def (text: str, call_id: str) -> None
 _dtmf_cb = None        # async def (dtmf: str, call_id: str) -> None
+_active_calls = None
+
+def register_active_calls(active_calls):
+    global _active_calls
+    _active_calls = active_calls
 
 def register_hangup(cb):
     """Main should call this once: claims_agent.register_hangup(hangup_call)"""
@@ -68,7 +67,57 @@ async def end_session(call_id: str, *, already_locked: bool = False):
 
     async def _finish():
         _finalize_current(s)
+
+        # Full claim transcript
+        full_claims_text = "\n\n--- CLAIM BREAK ---\n\n".join(s.get("claims", []))
+
+        # Raw full transcript
+        raw_full_transcript = " ".join(s.get("full_transcript", []))
+
+        logger.info(f"\n========== CALL ENDED: {call_id} ==========")
+        logger.info(f"\nFULL CLAIMS TRANSCRIPT:\n{full_claims_text if full_claims_text else '[No claims captured]'}")
+        logger.info(f"\nRAW FULL TRANSCRIPT:\n{raw_full_transcript if raw_full_transcript else '[No transcript captured]'}")
+
+        # Conversation history (if available from active calls)
+        try:
+            if _active_calls:
+                call_state = _active_calls.get(call_id)
+            else:
+                call_state = None
+        except Exception:
+            call_state = None
+
+        conv_lines = []
+        if call_state and getattr(call_state, "conversation_history", None):
+            clean_steps = []
+            for step in call_state.conversation_history:
+                if not isinstance(step, dict):
+                    continue
+
+                t = (step.get("transcript") or "").strip()
+                r = (step.get("gpt_result") or "").strip()
+
+                # Skip malformed/old entries that don't match the new schema
+                if not t and not r:
+                    continue
+
+                clean_steps.append({
+                    "transcript": t,
+                    "gpt_result": r,
+                })
+            for i, step in enumerate(clean_steps, start=1):
+                conv_lines.append(
+                    f"{i}. Transcript: {step['transcript']}\n   GPT: {step['gpt_result']}"
+                )
+        conv_text = "\n".join(conv_lines)
+        logger.info(
+            f"\nCONVERSATION HISTORY ({len(conv_lines)} steps):\n"
+            f"{conv_text if conv_text else '[No conversation history]'}"
+        )
+        logger.info("===========================================")
+
         s["active"] = False
+
         if _hangup_cb:
             try:
                 await _hangup_cb(call_id)
@@ -80,7 +129,6 @@ async def end_session(call_id: str, *, already_locked: bool = False):
     else:
         async with _locks.setdefault(call_id, asyncio.Lock()):
             await _finish()
-
 
 def get_claims(call_id: str) -> List[str]:
     s = _sessions.get(call_id) or {}
@@ -94,43 +142,69 @@ def _finalize_current(s: Dict):
     s["current"].clear()  # next claim starts clean
 
 
+def _append_conversation_step(call_id: str, transcript: str, gpt_result: str):
+    if not _active_calls:
+        return
+
+    call_state = _active_calls.get(call_id)
+    if not call_state:
+        return
+
+    transcript = (transcript or "").strip()
+    gpt_result = (gpt_result or "").strip()
+
+    # don't add empty rows
+    if not transcript and not gpt_result:
+        return
+
+    call_state.conversation_history.append({
+        "transcript": transcript,
+        "gpt_result": gpt_result
+    })
 async def handle_final(call_id: str, utterance: str):
     """
     Main calls this for EVERY debounced Final while in claim mode.
-    Append -> send tail (last N chars) of CURRENT claim to GPT-4o -> act on keyword.
+    Append -> send tail (last N chars) of transcript to GPT -> act on keyword.
     """
     s = _sessions.get(call_id)
     if not s or not s.get("active"):
         return
 
+    utterance = (utterance or "").strip()
+    if not utterance:
+        return
+
     lock = _locks.setdefault(call_id, asyncio.Lock())
     async with lock:
-        # 1) buffer the current claim only
+        # Buffer raw claim transcript
         s["current"].append(utterance)
-        s["full_transcript"].append(utterance) # For overall transcript
+        s["full_transcript"].append(utterance)
 
-                # 2) Decide what to send to GPT based on insurance
         insurance_name = config_manager.get_insurance_name()
-        if  insurance_name.upper() == "OSCAR"  or insurance_name.upper() == "HEALTH_FIRST":
-            # For Oscar: send ONLY the latest final utterance
-            chunk = utterance.strip()
+
+        # This is what the reviewer should see: only the current debounced utterance
+        review_text = utterance
+
+        # This is what GPT should see
+        if insurance_name.upper() in ("OSCAR", "HEALTH_FIRST"):
+            chunk = utterance
         else:
-            # 2) build transcript and take a small tail for the controller for all other insurances
-            # full_transcript = " ".join(s["current"])  
-            full_text = " ".join(s["full_transcript"])  # ALL claims combined
+            full_text = " ".join(s["full_transcript"]).strip()
             tail_chars = get_claims_tail_chars()
-            chunk = full_text[-tail_chars:].strip()   # e.g., last 250 chars for Cigna
+            chunk = full_text[-tail_chars:].strip()
 
         last_response = s.get("last_response", "")
 
-
-        # 3) ask GPT for ONE WORD intent
-        intent = await _ask_gpt_keyword(call_id, chunk,last_response)
+        intent = await _ask_gpt_keyword(
+            call_id,
+            chunk,
+            last_response,
+            review_text=review_text,
+        )
         s["last_response"] = intent
 
-                # 4) Handle DTMF responses FIRST (NEW - add this block)
         if intent.startswith("DTMF:"):
-            digit = intent.split(":")[1]
+            digit = intent.split(":", 1)[1]
             if _dtmf_cb:
                 try:
                     await _dtmf_cb(digit, call_id)
@@ -139,14 +213,12 @@ async def handle_final(call_id: str, utterance: str):
                     logger.error(f"[{call_id}] Error sending DTMF: {e}")
             return
 
-
-        # 4) act (STOP > NEXT > DETAILS > CONFIRM/NO > CONTINUE)
         if intent == "STOP":
             await end_session(call_id, already_locked=True)
             return
 
         if intent == "NEXT":
-            _finalize_current(s)  # store claim N, clear buffer
+            _finalize_current(s)
             if _tts_cb:
                 try:
                     await _tts_cb("Next claim", call_id)
@@ -186,48 +258,32 @@ async def handle_final(call_id: str, utterance: str):
                     pass
             return
 
-        # CONTINUE (or unknown): keep buffering
         return
-
 
 # ---------- GPT-4o controller (minimal logging) ----------
 
-async def _ask_gpt_keyword(call_id: str, transcript_chunk: str, last_response: str) -> str:
+async def _ask_gpt_keyword(
+    call_id: str,
+    transcript_chunk: str,
+    last_response: str,
+    review_text: str | None = None,
+) -> str:
     """
-    Use GPT-4o ('4-o') to return ONE WORD:
-    DETAILS, NEXT, STOP, CONFIRM, NO, or CONTINUE.
-    # """
-    # if not OPENAI_API_KEY:
-    #     return "CONTINUE"
-    
+    Use GPT to return one control intent.
+    """
     prompt_template = get_controller_prompt_template()
-
-    # Send last_response to ALL insurances
-    # Only CIGNA's prompt template will actually use {last_response}
-    # Other prompts will ignore it (no {last_response} placeholder)
-
 
     try:
         system_prompt = prompt_template.format_map({
-            'transcript_chunk': transcript_chunk,
-            'last_response': last_response or ""
+            "transcript_chunk": transcript_chunk,
+            "last_response": last_response or "",
         })
-    except KeyError as e:
-        # Fallback for prompts without {last_response}
+    except KeyError:
         system_prompt = prompt_template.format(transcript_chunk=transcript_chunk)
 
-
-
-    # print("\n========== SYSTEM PROMPT SENT TO GPT ==========\n")
-    # print(system_prompt)
-    # print("==============================================\n")
     print("Transcript chunk sent to GPT:", transcript_chunk)
     if last_response:
         print(f"Last response: {last_response}")
-
-
-    # minimal logs: what we send + what we get
-    #logger.info(f"[{call_id}] → GPT tail: {transcript_chunk}")
 
     try:
         t0 = time.perf_counter()
@@ -235,16 +291,21 @@ async def _ask_gpt_keyword(call_id: str, transcript_chunk: str, last_response: s
         ms = (time.perf_counter() - t0) * 1000
 
         if not raw:
-            return "CONTINUE"
+            intent = "CONTINUE"
+            _append_conversation_step(call_id, review_text or transcript_chunk, intent)
+            return intent
+
         intent = _map_keyword(raw.upper())
+        _append_conversation_step(call_id, review_text or transcript_chunk, intent)
         logger.info(f"[{call_id}] ← GPT: {raw!r} → {intent} ({ms:.0f}ms)")
         return intent
 
     except Exception as e:
-        logger.exception(
-            f"[{call_id}] GPT failure | transcript_len={len(transcript_chunk)} | last_response={last_response}"
-        )
-        return "CONTINUE"
+        logger.error(f"[{call_id}] GPT controller error: {e}")
+        intent = "CONTINUE"
+        _append_conversation_step(call_id, review_text or transcript_chunk, intent)
+        return intent
+    
 
 def _map_keyword(upper: str) -> str:
 
@@ -257,7 +318,7 @@ def _map_keyword(upper: str) -> str:
 
     if "DETAIL" in upper:
         return "DETAILS"
-    if "NEXT" in upper:
+    if  upper == "NEXT":
         return "NEXT"
     if "STOP" in upper or "END" in upper or "HANG" in upper or "MAIN MENU" in upper or "NO MORE CLAIM" in upper:
         return "STOP"

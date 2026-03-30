@@ -84,9 +84,7 @@ def make_stream_router(
             if call_state and hasattr(call_state, "last_media_ts"):
                 ms = (time.perf_counter() - call_state.last_media_ts) * 1000
                 #logger.info(f"⏱️ Debounced STT latency: {ms:.0f} ms")
-
-            if call_state:
-                call_state.conversation_history.append({"role": "user", "content": text})
+                
             
             logger.info(f"🚀 Calling handle_user_speech with concatenated text")
             await handle_user_speech(text, call_control_id)
@@ -111,8 +109,7 @@ def make_stream_router(
                     if call_state and hasattr(call_state, "last_media_ts"):
                         ms = (time.perf_counter() - call_state.last_media_ts) * 1000
                         logger.info(f" Debounced STT latency (flush): {ms:.0f} ms")
-                    if call_state:
-                        call_state.conversation_history.append({"role": "user", "content": text})
+                    
                     await handle_user_speech(text, call_control_id)
 
         # ───────── Azure STT callbacks ─────────

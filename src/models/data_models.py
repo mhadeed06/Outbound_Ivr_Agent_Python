@@ -35,7 +35,7 @@ class CallState:
     start_time: datetime = field(default_factory=datetime.now)
     websocket_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     azure_stt_session: Optional["AzureRealtimeSttService"] = None
-    conversation_history: List[str] = field(default_factory=list)
+    conversation_history: List[dict] = field(default_factory=list)
     # IDs from Telnyx
     agent_id: Optional[str] = None
     app_id: Optional[str] = None

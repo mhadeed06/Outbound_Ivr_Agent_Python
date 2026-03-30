@@ -43,17 +43,17 @@ def make_webhooks_router(
             call_state = active_calls[call_control_id]
 
             if event_type == "call.initiated":
-                logger.info("📞 Call initiated")
+                logger.info(f"[{call_control_id}]📞 Call initiated")
                 call_state.status = "initiated"
                 if call_control_id in initiated_events:
                     initiated_events[call_control_id].set()
 
             elif event_type == "call.ringing":
-                logger.info("🔔 Call ringing")
+                logger.info(f"[{call_control_id}]🔔 Call ringing")
                 call_state.status = "ringing"
 
             elif event_type == "call.answered":
-                logger.info("✅ Call answered - Media streaming should start automatically")
+                logger.info(f"[{call_control_id}]✅ Call answered - Media streaming should start automatically")
                 call_state.status = "answered"
 
             elif event_type == "call.hangup":

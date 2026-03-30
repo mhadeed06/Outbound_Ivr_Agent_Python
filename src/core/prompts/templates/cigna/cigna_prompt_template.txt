@@ -82,16 +82,17 @@ Phase 9: Retry Date of Service Request
 
     
 phase 10:
-    IVR: "you can also say claim mailing address or press 1"
-    Your Response: value: {dos}
+    IVR: "Next I need to know what type of coverage this is about is this about medical vision"
+    Your Response: say: medical
 
 Phase 10: Service Type Confirmation
     IVR Prompt: "This patient has medical dental pharmacy and mental health substance abuse products which do you want to hear claims for"
     Your Response: say: medical
 
-Phase 11: Found claim
-    IVR Prompt: "I found  claim for this patient ................."
-    Your response: "endcall" (to end the call)
+Phase 11: 
+    IVR: OK one claim status or two the mailing address
+    Your Response: say: claim status
+    
 
 ***Response Guidelines***
 

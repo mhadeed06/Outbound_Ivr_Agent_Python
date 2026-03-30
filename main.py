@@ -1,10 +1,9 @@
 import asyncio
-import httpx
 import time
 import os
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, Request
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from typing import Dict, Optional
+from typing import Dict
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
@@ -101,7 +100,18 @@ ensure_call_cleanup = partial(
     hangup_call=bound_hangup,   # ← use the bound version here
 )
 
+def append_conversation_step(call_state, transcript: str, gpt_result: str):
+    if not call_state:
+        return
+    transcript = (transcript or "").strip()
+    gpt_result = (gpt_result or "").strip()
+    if not transcript and not gpt_result:
+        return
 
+    call_state.conversation_history.append({
+        "transcript": transcript,
+        "gpt_result": gpt_result
+    })
 
 # ─── 1. handle_user_speech: decorate transcript into a full prompt ────────────
 
@@ -182,7 +192,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     #     transcript=transcript,
     #     tax_id="833613394",
     #     npi= "1407891245",
-    #     customer_id= "H70726498",
+    #     customer_id= "h70726498",
     #     dob=  "8/11/1948",
     #     member_name= "JOYCE TURNER",
     #     dos="6/11/2025"
@@ -193,11 +203,11 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1407891245",
-        customer_id= "36885575",
-        dob=  "10/25/1998",
-        member_name= "BILLY MORROW",
-        dos="7/14/2025"
+        npi= "1437285970",
+        customer_id= "102775279",
+        dob=  "4/14/1990",
+        member_name= "JACOB RITTIMANN",
+        dos="6/16/2025"
     )
 
        # OSCAR
@@ -222,9 +232,12 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
     t0 = time.perf_counter()
     response = await _call_gpt_api(prompt)
+    if call_state:
+        append_conversation_step(call_state, text, response)
     gpt_ms = (time.perf_counter() - t0) * 1000
     logger.info(f"GPT latency: {gpt_ms:.0f} ms")
     logger.info(f"GPT response: {response!r}")
+
 
     await process_llama_response(response, call_control_id)
 
@@ -252,6 +265,7 @@ process_llama_response = partial(
 
 
 claims_agent.register_hangup(bound_hangup)  # ← same 1-arg signature
+claims_agent.register_active_calls(active_calls)
 
 
 # Mount the orchestrate router (uses the SAME shared state/funcs from main.py)
@@ -266,7 +280,7 @@ app.include_router(
         WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
         STREAM_BASE_URL=STREAM_BASE_URL,
         # Wrap auto_hangup so dependencies are passed automatically
-        auto_hangup_fn=lambda call_id, delay_seconds=1200: auto_hangup(
+        auto_hangup_fn=lambda call_id, delay_seconds=1500: auto_hangup(
             call_id,
             active_calls,
             ensure_call_cleanup,

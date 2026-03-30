@@ -33,9 +33,9 @@ IMPORTANT STATEMENT: **YOU HAVE TO SELECT RESPONSE ACCORDING TO THE INSTRUCTIONS
 *DUPLICATE RESPONSE PREVENTION*:
 -Your last response was: "{last_response}"
 -IF THE RESPOSNE YOU SELECTED FROM THE INSTRUCTIONS ABOVE IS SAME AS THE LAST RESPOSNE, DO NOT REPEAT THE SAME RESPONSE, SEND CONTINUE INSTEAD
+-IF YOUR LAST RESPONSE WAS DETAILS, THEN DONOT RETURN DETAILS AGAIN, INSTEAD RETURN CONTINUE
 -If you want to send "{last_response}" again, send "CONTINUE" instead**
--YOU CAN ONLY RETURN CONTINUE TWO TIMES IN A ROW**
--Any other response (*DETAILS*, **NEXT**, STOP) can only be sent TWICE in a row**
+-Any other response (*DETAILS*, **NEXT**, STOP) cannot be sent TWICE in a row**
 
 
 Read this transcript carefully and check for the keywords in the order of priority above.
