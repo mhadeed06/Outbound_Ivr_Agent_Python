@@ -203,7 +203,7 @@ async def handle_final(call_id: str, utterance: str):
             call_id,
             chunk,
             last_response,
-            review_text=full_text,
+            review_text=utterance,
         )
         s["last_response"] = intent
 
