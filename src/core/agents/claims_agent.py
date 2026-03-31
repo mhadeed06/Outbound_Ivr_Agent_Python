@@ -203,9 +203,12 @@ async def handle_final(call_id: str, utterance: str):
             call_id,
             chunk,
             last_response,
-            review_text=utterance,
         )
         s["last_response"] = intent
+
+        # Store conversation history here (not inside _ask_gpt_keyword)
+        # so we always capture the actual utterance, not the trimmed chunk
+        _append_conversation_step(call_id, utterance, intent)
 
         if intent.startswith("DTMF:"):
             digit = intent.split(":", 1)[1]
@@ -270,10 +273,10 @@ async def _ask_gpt_keyword(
     call_id: str,
     transcript_chunk: str,
     last_response: str,
-    review_text: str | None = None,
 ) -> str:
     """
     Use GPT to return one control intent.
+    Conversation history is stored by the caller (handle_final), not here.
     """
     prompt_template = get_controller_prompt_template()
 
@@ -295,20 +298,15 @@ async def _ask_gpt_keyword(
         ms = (time.perf_counter() - t0) * 1000
 
         if not raw:
-            intent = "CONTINUE"
-            _append_conversation_step(call_id, review_text or transcript_chunk, intent)
-            return intent
+            return "CONTINUE"
 
         intent = _map_keyword(raw.upper())
-        _append_conversation_step(call_id, review_text or transcript_chunk, intent)
         logger.info(f"[{call_id}] ← GPT: {raw!r} → {intent} ({ms:.0f}ms)")
         return intent
 
     except Exception as e:
         logger.error(f"[{call_id}] GPT controller error: {e}")
-        intent = "CONTINUE"
-        _append_conversation_step(call_id, review_text or transcript_chunk, intent)
-        return intent
+        return "CONTINUE"
     
 
 def _map_keyword(upper: str) -> str:
