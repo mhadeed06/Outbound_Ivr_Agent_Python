@@ -71,6 +71,12 @@ def make_stream_router(
                 logger.info(f"❌ Debounce timer CANCELLED")
                 return
 
+            # Detach from debounce_task so _reschedule_debounce won't cancel us
+            # while we're actively processing (e.g. waiting for GPT response).
+            # Without this, a new STT event arriving during handle_user_speech
+            # would cancel this task and lose the first claims transcript.
+            state.debounce_task = None
+
             if not state.pending_finals:
                 logger.info(f"⚠️ No pending finals after debounce")
                 return
@@ -84,8 +90,8 @@ def make_stream_router(
             if call_state and hasattr(call_state, "last_media_ts"):
                 ms = (time.perf_counter() - call_state.last_media_ts) * 1000
                 #logger.info(f"⏱️ Debounced STT latency: {ms:.0f} ms")
-                
-            
+
+
             logger.info(f"🚀 Calling handle_user_speech with concatenated text")
             await handle_user_speech(text, call_control_id)
 
