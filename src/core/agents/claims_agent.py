@@ -320,7 +320,7 @@ def _map_keyword(upper: str) -> str:
 
     if "DETAIL" in upper:
         return "DETAILS"
-    if  upper == "NEXT":
+    if  "NEXT" in upper:
         return "NEXT"
     if "STOP" in upper or "END" in upper or "HANG" in upper or "MAIN MENU" in upper or "NO MORE CLAIM" in upper:
         return "STOP"

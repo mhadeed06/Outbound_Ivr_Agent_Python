@@ -14,13 +14,15 @@ CHECK IN ORDER:
 **PRIORITY 3. If no options/questions, just the details about the claim → CONTINUE**
 
 **PRIORITY 4. If the transcript have options and you cannot find keywords for any of the above, then just send → STOP**
-             **NEVER RETURN STOP IF THERE ARE WORDS LIKE NEXT CLAIM, DETIALS**
+             **NEVER RETURN STOP IF THERE ARE WORDS LIKE NEXT CLAIM, DETAILS**
+             **You can only send STOP if there is no other matching key words, otherwise donot send STOP**
 
 EXAMPLES:
 "press this to hear ""****details****"" fax it next claim" → DETAILS
 "you can one repeat that three fax it 4 next claim 5 check another date or 6 change patient or seven" → NEXT  
 "find a different claim"  OR  "you can say repeat that fax the full list or check another date or 6 change patient or seven say I'm done with claims to speak with one" → STOP
-"you can say repeat that fax the full list previous item or stop list" → STOP
+"you can say repeat that fax the full list previous item or stop list" → STOP 
+
 
  *** Before returning anything make sure the transcript has the exact keywords mentioned, ***
 
@@ -31,11 +33,13 @@ IMPORTANT STATEMENT: **YOU HAVE TO SELECT RESPONSE ACCORDING TO THE INSTRUCTIONS
 
 **important**  ::   *Before sending the instrution make sure the answer also aligh with the instructions below*
 *DUPLICATE RESPONSE PREVENTION*:
--Your last response was: "{last_response}"
+-Your last response was: "{last_response}" (History of last response is important to prevent repetition)
 -IF THE RESPOSNE YOU SELECTED FROM THE INSTRUCTIONS ABOVE IS SAME AS THE LAST RESPOSNE, DO NOT REPEAT THE SAME RESPONSE, SEND CONTINUE INSTEAD
 -IF YOUR LAST RESPONSE WAS DETAILS, THEN DONOT RETURN DETAILS AGAIN, INSTEAD RETURN CONTINUE
 -If you want to send "{last_response}" again, send "CONTINUE" instead**
--Any other response (*DETAILS*, **NEXT**, STOP) cannot be sent TWICE in a row**
+-IF YOUR LAST RESPONSE  WAS NEXT, THEN DONOT RETURN NEXT AGAIN, INSTEAD RETURN CONTINUE (IF you think according to trnascript you have to Return NEXT, but the last response you sent was also NEXT, then send CONTINUE instead)
+-If you want to send "{last_response}" again, send "CONTINUE" instead**
+-Any other response (*DETAILS*, **NEXT**) cannot be sent TWICE in a row**
 
 
 Read this transcript carefully and check for the keywords in the order of priority above.

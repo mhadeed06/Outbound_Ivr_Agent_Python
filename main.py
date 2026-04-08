@@ -188,27 +188,27 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     # )
 
     #    Humana
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     tax_id="833613394",
-    #     npi= "1407891245",
-    #     customer_id= "h70726498",
-    #     dob=  "8/11/1948",
-    #     member_name= "JOYCE TURNER",
-    #     dos="6/11/2025"
-    # )
-     
-
-    # CIGNA
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1437285970",
-        customer_id= "102775279",
-        dob=  "4/14/1990",
-        member_name= "JACOB RITTIMANN",
-        dos="6/16/2025"
+        npi= "1407891245",
+        customer_id= "h70726498",
+        dob=  "8/11/1948",
+        member_name= "JOYCE TURNER",
+        dos="6/11/2025"
     )
+     
+
+    # CIGNA
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     tax_id="833613394",
+    #     npi= "1437285970",
+    #     customer_id= "102775279",
+    #     dob=  "4/14/1990",
+    #     member_name= "JACOB RITTIMANN",
+    #     dos="6/16/2025"
+    # )
 
        # OSCAR
     # prompt = prompt_template.format(
