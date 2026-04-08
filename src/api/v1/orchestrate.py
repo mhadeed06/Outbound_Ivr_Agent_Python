@@ -5,9 +5,10 @@ import asyncio
 import logging
 from typing import Dict, Callable
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from src.auth.jwt_auth import verify_token
 from src.config.insurance_config import config_manager
 from src.models.data_models import CallState
 import src.services.telnyx.client as telnyx_client
@@ -34,7 +35,7 @@ def make_orchestrate_router(
     router = APIRouter()
 
     @router.post("/orchestrate_call_simple")
-    async def orchestrate_call_simple(request: Request, wait_for_initiated_ms: int = 10000):
+    async def orchestrate_call_simple(request: Request, user: dict = Depends(verify_token), wait_for_initiated_ms: int = 10000):
         """
         Receive agent_id + app_id, start the Telnyx call (same flow as /start_call),
         optionally wait briefly for 'call.initiated', then return status.
