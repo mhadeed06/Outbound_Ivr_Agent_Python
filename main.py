@@ -12,7 +12,7 @@ from pydantic import BaseModel
 import re
 from functools import partial
 #from prompt import PROMPT_TEMPLATE
-import src.core.agents.claims_agent as claims_agent
+import src.core.claims.claims_agent as claims_agent
 from src.config.insurance_config import config_manager
 from src.core.prompts.manager import get_main_prompt_template
 from src.models.data_models import CallState, SimpleCallRequest
@@ -22,8 +22,8 @@ from src.api.v1.webhooks import make_webhooks_router
 from src.api.v1.stream import make_stream_router
 #from services.azure_tts_service import speak_with_azure
 from src.services.azure.tts_service import speak_with_azure as _speak_with_azure
-from src.services.llm_service import _call_gpt_api, _process_llama_response
-from src.services.claims_helpers import is_claim_not_found, is_claim_start
+from src.services.llm.llm_service import _call_gpt_api, _process_llama_response
+from src.core.claims.claims_helpers import is_claim_not_found, is_claim_start
 from src.services.call_lifecycle import hangup_call, auto_hangup
 from src.services.call_lifecycle import hangup_call as _hangup_call
 
