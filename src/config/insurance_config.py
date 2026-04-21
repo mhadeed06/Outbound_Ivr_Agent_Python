@@ -13,8 +13,9 @@ class InsuranceConfig:
     claims_tail_chars: int
     prompt_template: str
     claims_prompt_template: str
-    segmentation_silence_ms: int  # NEW: For normal flow
-    claim_segmentation_silence_ms: int  # NEW: For claim flow
+    segmentation_silence_ms: int  # For normal flow
+    claim_segmentation_silence_ms: int  # For claim flow
+    auto_hangup_seconds: int  # Force-hangup if the call runs longer than this
 
 
 # All insurance configurations
@@ -28,11 +29,12 @@ INSURANCE_CONFIGS = {
         prompt_template="CIGNA_PROMPT_TEMPLATE",
         claims_prompt_template="CIGNA_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=600,
-        claim_segmentation_silence_ms=1700
+        claim_segmentation_silence_ms=1700,
+        auto_hangup_seconds=900,
     ),
-    
+
     "HUMANA": InsuranceConfig(
-        name="HUMANA", 
+        name="HUMANA",
         phone_number="+18007834599",
         debounce_seconds=0.4,
         claim_debounce_seconds=1.2,
@@ -40,44 +42,48 @@ INSURANCE_CONFIGS = {
         prompt_template="HUMANA_PROMPT_TEMPLATE",
         claims_prompt_template="HUMANA_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=500,
-        claim_segmentation_silence_ms=1300
+        claim_segmentation_silence_ms=1300,
+        auto_hangup_seconds=900,
     ),
-    
+
     "BAYLOR_SCOTT": InsuranceConfig(
         name="BAYLOR_SCOTT",
-        phone_number="+18555727238", 
+        phone_number="+18555727238",
         debounce_seconds=0.1,
         claim_debounce_seconds=1.7,
         claims_tail_chars=200,
-        prompt_template="BAYLOR_SCOTT_PROMPT_TEMPLATE", 
+        prompt_template="BAYLOR_SCOTT_PROMPT_TEMPLATE",
         claims_prompt_template="BAYLOR_SCOTT_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=600,
-        claim_segmentation_silence_ms=1000
+        claim_segmentation_silence_ms=1000,
+        auto_hangup_seconds=900,
     ),
-    
+
     "OSCAR": InsuranceConfig(
         name="OSCAR",
-        phone_number="+18556722755", 
+        phone_number="+18556722755",
         debounce_seconds=0.0,
         claim_debounce_seconds=1.2,
         claims_tail_chars=250,
-        prompt_template="OSCAR_PROMPT_TEMPLATE", 
+        prompt_template="OSCAR_PROMPT_TEMPLATE",
         claims_prompt_template="OSCAR_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=1400,
-        claim_segmentation_silence_ms=1800
+        claim_segmentation_silence_ms=1800,
+        auto_hangup_seconds=900,
     ),
 
 
     "HEALTH_FIRST": InsuranceConfig(
         name="HEALTH_FIRST",
-        phone_number="+18882502220", 
+        phone_number="+18882502220",
         debounce_seconds=0.1,
         claim_debounce_seconds=1,
         claims_tail_chars=200,
-        prompt_template="HEALTH_FIRST_PROMPT_TEMPLATE", 
+        prompt_template="HEALTH_FIRST_PROMPT_TEMPLATE",
         claims_prompt_template="HEALTH_FIRST_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=1400,
-        claim_segmentation_silence_ms=1800
+        claim_segmentation_silence_ms=1800,
+        auto_hangup_seconds=900,
     ),
 }
 
@@ -129,6 +135,10 @@ class ConfigManager:
     def get_claim_segmentation_silence_ms(self) -> int:
         """Get segmentation silence timeout for current insurance (claim flow)"""
         return self.current_config.claim_segmentation_silence_ms
+
+    def get_auto_hangup_seconds(self) -> int:
+        """Get the hard call timeout (seconds) for current insurance."""
+        return self.current_config.auto_hangup_seconds
 
 
 

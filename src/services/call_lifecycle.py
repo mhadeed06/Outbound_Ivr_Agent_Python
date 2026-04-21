@@ -20,9 +20,10 @@ async def hangup_call(call_control_id: str, *, telnyx_client, TELNYX_BASE_URL: s
         logger.warning(f"⚠️ hangup exception for {call_control_id}: {e}")
 
 
-async def auto_hangup(call_control_id: str, active_calls: Dict, ensure_call_cleanup, delay_seconds: int = 1500):
+async def auto_hangup(call_control_id: str, active_calls: Dict, ensure_call_cleanup, delay_seconds: int):
     """
     Wait `delay_seconds`, and if the call is still active, hang it up.
+    `delay_seconds` is supplied by the caller from the insurance config.
     """
     await asyncio.sleep(delay_seconds)
     if call_control_id in active_calls:

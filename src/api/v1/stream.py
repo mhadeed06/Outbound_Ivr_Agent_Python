@@ -13,6 +13,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from src.models.data_models import CallState
 from src.services.azure.stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from src.config.insurance_config import config_manager  # ✅ NEW: pull insurer-specific timeouts
+from src.utils.logging_config import set_call_id
 
   # your dataclass
 
@@ -175,6 +176,8 @@ def make_stream_router(
 
                 if ev == "start":
                     call_control_id = msg["start"]["call_control_id"]
+                    # Tag every log line from this WebSocket session with the call's short ID.
+                    set_call_id(call_control_id)
                     logger.info(f" Call started: {call_control_id}")
 
                     # log Telnyx-reported media format (if provided)

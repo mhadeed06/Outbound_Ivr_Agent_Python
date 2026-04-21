@@ -28,7 +28,8 @@ from src.services.call_lifecycle import hangup_call, auto_hangup
 from src.services.call_lifecycle import hangup_call as _hangup_call
 
 from src.services.call_cleanup import ensure_call_cleanup as _ensure_call_cleanup
-from src.utils.logging_config import setup_logging
+from src.utils.logging_config import setup_logging, set_call_id
+from src.utils.transcript import append_ivr, append_agent_dtmf
 
 
 
@@ -126,6 +127,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         return
 
     call_state = active_calls.get(call_control_id)
+    append_ivr(call_state, text)
 
     # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
@@ -177,26 +179,26 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     prompt_template = get_main_prompt_template()  # Gets correct template for current insurance
      
     # Example: BAYLOR SCOOT & WHITE
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     tax_id="833613394",
-    #     npi= "1285144311",
-    #     customer_id= "100099748800",
-    #     dob=  "8/3/1970",
-    #     member_name= "INDIA WALKER",
-    #     dos="4/2/2025"
-    # )
-
-    #    Humana
     prompt = prompt_template.format(
         transcript=transcript,
         tax_id="833613394",
-        npi= "1407891245",
-        customer_id= "h70726498",
-        dob=  "8/11/1948",
-        member_name= "JOYCE TURNER",
-        dos="6/11/2025"
+        npi= "1285144311",
+        customer_id= "100081367501",
+        dob=  "1/11/1961",
+        member_name= "ROBIN RADCLIFFE",
+        dos="4/3/2024"
     )
+
+    #    Humana
+    # prompt = prompt_template.format(
+    #     transcript=transcript,
+    #     tax_id="833613394",
+    #     npi= "1407891245",
+    #     customer_id= "h70726498",
+    #     dob=  "8/11/1948",
+    #     member_name= "JOYCE TURNER",
+    #     dos="6/11/2025"
+    # )
      
 
     # CIGNA
@@ -249,6 +251,7 @@ async def send_dtmf(digits: str, call_control_id: str):
         cleaned = "".join(ch for ch in digits if ch.isdigit() or ch in "*#")
         # If you need durations, we can extend telnyx_client to accept them.
         await telnyx_client.send_dtmf(call_control_id, cleaned, TELNYX_BASE_URL, HEADERS)
+        append_agent_dtmf(active_calls.get(call_control_id), cleaned)
         logger.info(f"✅ DTMF sent: {cleaned}")
     except Exception as e:
         logger.error(f"❌ Error sending DTMF: {str(e)}")
@@ -279,8 +282,10 @@ app.include_router(
         CALL_CONTROL_APP_ID=CALL_CONTROL_APP_ID,
         WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
         STREAM_BASE_URL=STREAM_BASE_URL,
-        # Wrap auto_hangup so dependencies are passed automatically
-        auto_hangup_fn=lambda call_id, delay_seconds=1500: auto_hangup(
+        # Wrap auto_hangup so dependencies are passed automatically.
+        # Note: delay_seconds is supplied by orchestrate.py from the insurance
+        # config — the default here is only a safety net.
+        auto_hangup_fn=lambda call_id, delay_seconds: auto_hangup(
             call_id,
             active_calls,
             ensure_call_cleanup,
@@ -322,6 +327,7 @@ async def on_shutdown():
     logger.info("🔌 Shutdown event: hanging up all active calls…")
     for call_id in list(active_calls.keys()):
         try:
+            set_call_id(call_id)
             await ensure_call_cleanup(call_id, reason="shutdown", send_hangup=True)
         except Exception as e:
             logger.error(f"❌ Cleanup error for {call_id}: {e}")
@@ -333,7 +339,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, 
                 host="0.0.0.0",
-                port=9080,
+                port=5000,
                 reload=False,
                 )
 

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from src.auth.jwt_auth import verify_token
 from src.config.insurance_config import config_manager
+from src.utils.logging_config import set_call_id
 from src.models.data_models import CallState
 import src.services.telnyx.client as telnyx_client
 
@@ -48,14 +49,20 @@ def make_orchestrate_router(
                 logger.exception("❌ Invalid JSON body")
                 return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-            agent_id = incoming.get("agent_id")
-            app_id   = incoming.get("app_id")
+            visit_id    = incoming.get("visit_id")
+            customer_id = incoming.get("customer_id")
+            payer_id    = incoming.get("payer_id")
 
-            if not agent_id or not app_id:
+            if not visit_id or not customer_id or not payer_id:
                 return JSONResponse(
-                    {"error": "agent_id and app_id are required"},
+                    {"error": "visit_id, customer_id, and payer_id are required"},
                     status_code=400
                 )
+
+            # Capture the raw Bearer token from the Authorization header —
+            # reused later when uploading recording/transcript to PracticeEHR.
+            auth_header = request.headers.get("authorization", "")
+            auth_token = auth_header.split(" ", 1)[1] if auth_header.lower().startswith("bearer ") else ""
 
             # NOTE: keep the same TEL_TO behavior as your main.py
             TEL_TO = config_manager.get_phone_number()
@@ -107,14 +114,23 @@ def make_orchestrate_router(
                     status_code=500
                 )
 
-            # ── store call state + your two IDs (unchanged) ─────────────────
+            # Tag every subsequent log line on this request (and any task it spawns)
+            # with the short call ID so concurrent calls can be grepped apart.
+            set_call_id(call_control_id)
+
+            # ── store call state with request IDs, session ID, and auth token ──
             active_calls[call_control_id] = CallState(
                 call_control_id=call_control_id,
-                agent_id=agent_id,
-                app_id=app_id
+                visit_id=visit_id,
+                customer_id=customer_id,
+                payer_id=payer_id,
+                call_session_id=call_session_id,
+                auth_token=auth_token,
             )
-            # keep your original behavior for auto hangup
-            asyncio.create_task(auto_hangup_fn(call_control_id, delay_seconds=900))  # type: ignore[arg-type]
+            # Auto-hangup timeout comes from the active insurance config —
+            # edit it in src/config/insurance_config.py (auto_hangup_seconds).
+            auto_hangup_seconds = config_manager.get_auto_hangup_seconds()
+            asyncio.create_task(auto_hangup_fn(call_control_id, delay_seconds=auto_hangup_seconds))  # type: ignore[arg-type]
 
             # ── race-proof wait for 'call.initiated' (unchanged) ────────────
             status = "queued"
@@ -144,8 +160,9 @@ def make_orchestrate_router(
             return JSONResponse({
                 "success": True,
                 "status": status,
-                "agent_id": agent_id,
-                "app_id": app_id,
+                "visit_id": visit_id,
+                "customer_id": customer_id,
+                "payer_id": payer_id,
                 "call_control_id": call_control_id,
                 "call_session_id": call_session_id,
                 "is_alive": is_alive

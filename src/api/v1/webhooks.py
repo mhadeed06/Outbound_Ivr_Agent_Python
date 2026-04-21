@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from src.models.data_models import CallState
+from src.utils.logging_config import set_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ def make_webhooks_router(
             event_type = data.get("event_type")
             payload = data.get("payload", {})
             call_control_id = payload.get("call_control_id")
+
+            # Tag every log line in this webhook handling with the short call ID.
+            set_call_id(call_control_id or "")
 
             logger.info(f"📞 Call Event: {event_type}")
 

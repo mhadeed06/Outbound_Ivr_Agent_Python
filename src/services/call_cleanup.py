@@ -3,6 +3,11 @@ import logging
 from typing import Dict, Any, Callable
 import asyncio
 
+from src.services.practice_ehr.post_call_upload import (
+    snapshot_call_state,
+    upload_call_artifacts,
+)
+
 logger = logging.getLogger(__name__)
 
 async def ensure_call_cleanup(
@@ -59,12 +64,20 @@ async def ensure_call_cleanup(
             except Exception as e:
                 logger.warning(f"[{call_control_id}] hangup_call error (ignored): {e}")
 
-        
+        # 4️⃣ snapshot state for the post-call upload BEFORE we drop it
+        upload_snapshot = snapshot_call_state(cs)
 
-        # 4️⃣ clear flags and forget this call
+        # 5️⃣ clear flags and forget this call
         cs.claim_mode = False
         cs.cleanup_done = True
 
         active_calls.pop(call_control_id, None)
 
         logger.info(f"✅ Cleanup complete [{call_control_id}]")
+
+    # 6️⃣ fire-and-forget upload of recording + transcript to PracticeEHR.
+    # Runs outside the cleanup lock so it doesn't block call teardown.
+    try:
+        asyncio.create_task(upload_call_artifacts(upload_snapshot))
+    except Exception as e:
+        logger.warning(f"[{call_control_id}] failed to schedule post-call upload: {e}")

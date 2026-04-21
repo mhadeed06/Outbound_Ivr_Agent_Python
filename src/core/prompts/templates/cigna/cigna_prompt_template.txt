@@ -44,7 +44,7 @@ Phase 2: Tax ID Request
 
 Phase 3: Tax ID Confirmation
     IVR Prompt: "Thank you" (Tax ID confirmation)
-    Your Response: SAY YES AND CONFIRM IT 
+    Your Response: dtmf: 1
 
     IVR PROMPT: How may i Help you, you can say things like claims information or eligibility
     Your Response: say: Claims 

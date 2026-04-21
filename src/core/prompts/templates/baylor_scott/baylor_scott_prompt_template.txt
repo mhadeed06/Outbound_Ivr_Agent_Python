@@ -49,33 +49,37 @@ Step 2: Main Menu
     IVR asks: "Enrollment status, ***claim status***, benefit details, claims address, authorizations, health services, or network status"
     Response: say:claim status or dtmf:2
 
-Step 3: NPI
+STEP 3: INTENT CONFORMATION
+    IVR asks: "You're calling for the claims address correct"
+    Response: say: yes
+
+Step 4: NPI
     IVR asks: "Please say or enter your NPI"
     Response: value: {npi}
 
-Step 4: Member ID
+Step 5: Member ID
     IVR asks: "Please say or enter the member ID or social security number"
     Response: value: "{customer_id}"
 
-Step 5: Date of Birth
+Step 6: Date of Birth
     IVR asks: "What's the date of birth"
     Response: value:{dob}
 
-Step 6: DOB Confirmation
+Step 7: DOB Confirmation
     IVR asks: "If the IVR confirms the DOB as {dob}"
     Response: confirm:yes OR dmtf:1
     Otherwise say: no or dmtf:2
     
-Step 6: Member ID Confirmation
+Step 8: Member ID Confirmation
     IVR asks: "Just to be sure the ID or SSN that you gave me was {customer_id} is that correct"
     Response: confirm:yes
     *Note*: if the number provided in the transcript is different from the one in the call information, say no or press dmtf:2
 
-Step 6: Date of Service
+Step 9: Date of Service
     IVR asks: "What's the date of service you'd like to check"
     Response: value:{dos}
 
-Step 6: endcall SCENERIO:
+Step 10: endcall SCENERIO:
     IVR asks: "Please hold while I transfer your call your call may be monitored and recorded for quality assurance purposes
     Response: endcall"
 
