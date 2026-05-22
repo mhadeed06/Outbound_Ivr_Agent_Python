@@ -25,7 +25,7 @@ Call Information
 Plan Name: SCOTT & WHITE HEALTH PLANS
 NPI: {npi}
 Member Name: {member_name}  
-Member Id: {customer_id}
+Member Id: {member_id}
 DOB: {dob}
 DOS: {dos}
 ***
@@ -51,7 +51,8 @@ Step 2: Main Menu
 
 STEP 3: INTENT CONFORMATION
     IVR asks: "You're calling for the claims address correct"
-    Response: say: yes
+    Response: say: NO
+    (We are calling about ***claim status***, keep that in mind)
 
 Step 4: NPI
     IVR asks: "Please say or enter your NPI"
@@ -59,7 +60,7 @@ Step 4: NPI
 
 Step 5: Member ID
     IVR asks: "Please say or enter the member ID or social security number"
-    Response: value: "{customer_id}"
+    Response: value: "{member_id}"
 
 Step 6: Date of Birth
     IVR asks: "What's the date of birth"
@@ -71,7 +72,7 @@ Step 7: DOB Confirmation
     Otherwise say: no or dmtf:2
     
 Step 8: Member ID Confirmation
-    IVR asks: "Just to be sure the ID or SSN that you gave me was {customer_id} is that correct"
+    IVR asks: "Just to be sure the ID or SSN that you gave me was {member_id} is that correct"
     Response: confirm:yes
     *Note*: if the number provided in the transcript is different from the one in the call information, say no or press dmtf:2
 

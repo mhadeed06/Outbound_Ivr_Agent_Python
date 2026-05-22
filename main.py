@@ -1,7 +1,7 @@
 import asyncio
 import time
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from typing import Dict
 from dataclasses import dataclass, field
@@ -48,13 +48,11 @@ WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")  # Your server URL
 STREAM_BASE_URL = WEBHOOK_BASE_URL.replace("https://", "wss://")
 AZURE_SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
-os.environ["SSL_KEY_PASSWORD"] = "PEHR$3quelM3d27"
 
 
-TEL_TO = config_manager.get_phone_number()  
-
-DEBOUNCE_SECONDS = config_manager.get_debounce_seconds()
-CLAIM_DEBOUNCE_SECONDS = config_manager.get_claim_debounce_seconds()
+# NOTE: insurance-specific values (TEL_TO, debounce timings, etc.) are read
+# per call from the active insurance config (ContextVar). Do not materialize
+# them at module load — no insurer is active until a request arrives.
 
 
 HEADERS = {
@@ -67,6 +65,18 @@ setup_logging()
 
 
 logger = logging.getLogger(__name__)
+
+
+# Convert every HTTPException (including JWT auth failures raised by
+# src/auth/jwt_auth.py) to the frontend-standard {succeeded, message} shape.
+# Keeps response format uniform across success and error paths.
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"succeeded": False, "message": detail},
+    )
 
 
 initiated_events: Dict[str, asyncio.Event] = {}
@@ -177,60 +187,12 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
 
     prompt_template = get_main_prompt_template()  # Gets correct template for current insurance
-     
-    # Example: BAYLOR SCOOT & WHITE
-    prompt = prompt_template.format(
-        transcript=transcript,
-        tax_id="833613394",
-        npi= "1285144311",
-        customer_id= "100081367501",
-        dob=  "1/11/1961",
-        member_name= "ROBIN RADCLIFFE",
-        dos="4/3/2024"
-    )
 
-    #    Humana
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     tax_id="833613394",
-    #     npi= "1407891245",
-    #     customer_id= "h70726498",
-    #     dob=  "8/11/1948",
-    #     member_name= "JOYCE TURNER",
-    #     dos="6/11/2025"
-    # )
-     
-
-    # CIGNA
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     tax_id="833613394",
-    #     npi= "1437285970",
-    #     customer_id= "102775279",
-    #     dob=  "4/14/1990",
-    #     member_name= "JACOB RITTIMANN",
-    #     dos="6/16/2025"
-    # )
-
-       # OSCAR
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     tax_id="874546086",
-    #     customer_id= "7618978201",
-    #     npi= "1497595284",
-    #     dos="10/17/2025"
-    # )
-    
-
-    # health first
-
-    # prompt = prompt_template.format(
-    #     transcript=transcript,
-    #     claim_number= " 0105172504677",
-    #     Member_id= "WY15318S",
-    #     dob= "05/02/1962",
-    # )
-
+    # Visit data was fetched from the Clinical API in /orchestrate_call_simple
+    # and stored on CallState. Required fields were validated there, so by this
+    # point visit_data has everything the prompt template needs.
+    visit_data = (call_state.visit_data or {}) if call_state else {}
+    prompt = prompt_template.format(transcript=transcript, **visit_data)
 
     t0 = time.perf_counter()
     response = await _call_gpt_api(prompt)
@@ -309,7 +271,6 @@ app.include_router(
 app.include_router(
     make_stream_router(
         active_calls=active_calls,
-        DEBOUNCE_SECONDS=DEBOUNCE_SECONDS,
         stt_manager=stt_manager,
         convert_mulaw_to_pcm=convert_mulaw_to_pcm,
         claims_agent=claims_agent,

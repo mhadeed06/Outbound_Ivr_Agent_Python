@@ -17,10 +17,15 @@ azure_client = AsyncAzureOpenAI(
     api_version=os.getenv("PTU_API_VERSION"),
 )
 
-async def _call_gpt_api(prompt: str) -> str:
+async def _call_gpt_api(prompt: str, max_tokens: int = 50) -> str:
     """
     Azure GPT call replacing LLaMA.
     Returns plain text response.
+
+    max_tokens defaults to 50 — enough for the short IVR-control replies
+    (one-word intents, "say:"/"value:" commands). Callers that need a longer
+    response (e.g. the claim classifier returning JSON + a description) should
+    pass a larger value.
     """
 
     try:
@@ -37,7 +42,7 @@ async def _call_gpt_api(prompt: str) -> str:
                 }
             ],
             temperature=0,
-            max_tokens=20,
+            max_tokens=max_tokens,
         )
 
 
@@ -131,9 +136,11 @@ async def _process_llama_response(
     compact = low.replace(" ", "")
     if compact in ("endcall", "end", "hangup"):
         logger.info("→ Hanging up per instruction")
-        cs = active_calls.get(call_control_id)
-        if cs:
-            cs.status = "hangup"
+        # NOTE: do NOT set cs.status = "hangup" here. ensure_call_cleanup only
+        # sends the Telnyx hangup when status is not already "hangup"/"ended";
+        # pre-setting it would make cleanup skip the hangup and the call would
+        # linger on Telnyx (and the recording would never finalize). Let
+        # cleanup send the hangup and let the webhook set the status.
         await ensure_call_cleanup(call_control_id, reason="llm: end/hangup command", send_hangup=True)
         return
 

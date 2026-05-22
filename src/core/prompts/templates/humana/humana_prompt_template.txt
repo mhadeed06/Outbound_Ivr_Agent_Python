@@ -21,7 +21,7 @@ Call Information
 ***
 NPI: {npi}  (spoken)
 TAX ID: {tax_id}
-Member ID: {customer_id}  (spoken)
+Member ID: {member_id}  (spoken)
 Member Name: {member_name}  or Peralta (**Important note**: Some time the system won't say the last name, or just say THE FIRST NAME, or something matching, so validate that name and confirm it)
 DOB: {dob}
 DOS: {dos}
@@ -66,7 +66,7 @@ Your Response:  "{npi}" (speak)
 
 Phase 8: Member ID Request
 IVR Prompt: "Please say or enter the member's ID number."
-Your Response: "{customer_id}" (speak)    
+Your Response: "{member_id}" (speak)    
 
 Phase 9: Date of Birth Request
 IVR Prompt: "And the member's month, day, and year of birth."

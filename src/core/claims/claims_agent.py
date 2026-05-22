@@ -49,7 +49,14 @@ def is_active(call_id: str) -> bool:
 
 
 async def start_session(call_id: str):
-    _sessions[call_id] = {"active": True, "current": [], "claims": [], "last_response": "", "full_transcript": []}
+    _sessions[call_id] = {
+        "active": True,
+        "current": [],
+        "claims": [],
+        "last_response": "",
+        "last_chunk": "",  # last transcript chunk ACTUALLY sent to GPT (used for dedupe)
+        "full_transcript": [],
+    }
     _locks[call_id] = _locks.get(call_id) or asyncio.Lock()
 
 

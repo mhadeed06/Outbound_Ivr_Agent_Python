@@ -8,6 +8,7 @@ from typing import Dict, Callable, Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from src.config.insurance_config import set_active_insurance_by_name
 from src.models.data_models import CallState
 from src.utils.logging_config import set_call_id
 
@@ -45,6 +46,12 @@ def make_webhooks_router(
                 return JSONResponse({"status": "ok"})
 
             call_state = active_calls[call_control_id]
+
+            # Restore the insurance ContextVar for this webhook's task so any
+            # downstream config_manager.get_*() calls (e.g. during cleanup) see
+            # the right insurer. The call was created with insurance_name set.
+            if call_state.insurance_name:
+                set_active_insurance_by_name(call_state.insurance_name)
 
             if event_type == "call.initiated":
                 logger.info(f"[{call_control_id}]📞 Call initiated")

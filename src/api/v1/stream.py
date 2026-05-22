@@ -12,8 +12,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.models.data_models import CallState
 from src.services.azure.stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
-from src.config.insurance_config import config_manager  # ✅ NEW: pull insurer-specific timeouts
+from src.config.insurance_config import config_manager, set_active_insurance_by_name
 from src.utils.logging_config import set_call_id
+
+# Default initial debounce — per-call values come from call_state once the
+# 'start' event is received and we know which call this WebSocket belongs to.
+DEFAULT_DEBOUNCE_SECONDS = 0.5
 
   # your dataclass
 
@@ -22,7 +26,6 @@ logger = logging.getLogger(__name__)
 def make_stream_router(
     *,
     active_calls: Dict[str, CallState],
-    DEBOUNCE_SECONDS: float,
     stt_manager,                          # pass the module/object from main
     convert_mulaw_to_pcm: Callable[[bytes], bytes],
     claims_agent,                         # pass the module
@@ -60,7 +63,7 @@ def make_stream_router(
         state = SimpleNamespace(
             pending_finals=[],                                  # accumulate final STT chunks here
             debounce_task=None,                                 # the timer task we cancel/restart
-            debounce_time=DEBOUNCE_SECONDS,                     # how long to wait for "silence" before processing
+            debounce_time=DEFAULT_DEBOUNCE_SECONDS,             # overwritten from call_state on 'start'
         )
 
         async def _process_after_quiet():
@@ -124,7 +127,7 @@ def make_stream_router(
             logger.info(f"[STT][partial] {text[:60]!r}")
 
             if call_state:
-                desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
+                desired = getattr(call_state, "debounce_seconds", DEFAULT_DEBOUNCE_SECONDS)
                 if state.debounce_time != desired:
                     state.debounce_time = desired
                 if getattr(call_state, "need_debounce_reset", False):
@@ -143,7 +146,7 @@ def make_stream_router(
                 return
 
             if call_state:
-                desired = getattr(call_state, "debounce_seconds", DEBOUNCE_SECONDS)
+                desired = getattr(call_state, "debounce_seconds", DEFAULT_DEBOUNCE_SECONDS)
                 if state.debounce_time != desired:
                     logger.info(f"⚙️ Debounce time changed from {state.debounce_time} to {desired}")
                     state.debounce_time = desired
@@ -178,6 +181,14 @@ def make_stream_router(
                     call_control_id = msg["start"]["call_control_id"]
                     # Tag every log line from this WebSocket session with the call's short ID.
                     set_call_id(call_control_id)
+
+                    # Restore the insurance ContextVar for this WebSocket's task.
+                    # All downstream config_manager.get_*() calls (stream.py, main.py's
+                    # handle_user_speech, claims_controller) depend on this.
+                    cs_lookup = active_calls.get(call_control_id)
+                    if cs_lookup and cs_lookup.insurance_name:
+                        set_active_insurance_by_name(cs_lookup.insurance_name)
+
                     logger.info(f" Call started: {call_control_id}")
 
                     # log Telnyx-reported media format (if provided)

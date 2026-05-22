@@ -1,5 +1,6 @@
 import time
 import asyncio
+import difflib
 import logging
 from src.config.insurance_config import config_manager
 from src.core.prompts.claims_prompts import get_claims_prompt
@@ -7,6 +8,14 @@ from src.services.llm.llm_service import _call_gpt_api
 from src.core.claims.claims_intent_mapper import map_keyword
 
 logger = logging.getLogger(__name__)
+
+# If the new chunk's similarity to the last chunk sent to GPT is >= this
+# threshold, treat it as a near-duplicate and skip the GPT call.
+# 0.85 ≈ up to ~37 chars of drift in a 250-char chunk still counts as
+# "same" (chosen to absorb STT trailing-char races without swallowing
+# meaningful new content).
+# Only applied when the insurance config has dedupe_chunks=True.
+_NEAR_DUPLICATE_RATIO = 0.85
 
 
 def get_claims_tail_chars() -> int:
@@ -18,6 +27,24 @@ def get_controller_prompt_template() -> str:
     """Get the controller prompt template for current insurance"""
     config = config_manager.get_config()
     return get_claims_prompt(config.claims_prompt_template)
+
+
+def _is_near_duplicate_chunk(prev: str, curr: str, threshold: float = _NEAR_DUPLICATE_RATIO) -> bool:
+    """True when the current chunk is essentially the previous chunk with
+    only a small tail added/removed (STT trailing-char race).
+
+    Note: autojunk=False is required — the default autojunk heuristic
+    treats repeated characters (common in IVR transcripts with phrases
+    like "press 2", "press 3") as noise and returns misleadingly low
+    similarity ratios.
+    """
+    if not prev or not curr:
+        return False
+    if prev == curr:
+        return True
+    if prev in curr or curr in prev:
+        return True
+    return difflib.SequenceMatcher(None, prev, curr, autojunk=False).ratio() >= threshold
 
 
 async def handle_final(call_id: str, utterance: str):
@@ -58,12 +85,29 @@ async def handle_final(call_id: str, utterance: str):
 
         last_response = s.get("last_response", "")
 
-        intent = await _ask_gpt_keyword(
-            call_id,
-            chunk,
-            last_response,
-        )
-        s["last_response"] = intent
+        # Near-duplicate short-circuit (insurance-config gated).
+        # If this insurer has dedupe enabled and the new chunk is near-
+        # identical to the last chunk we ACTUALLY sent to GPT, skip the
+        # GPT call and treat it as CONTINUE.
+        #
+        # IMPORTANT: `last_chunk` and `last_response` are ONLY updated
+        # when GPT actually runs. Short-circuits must not overwrite them,
+        # otherwise the prompt's duplicate-prevention rule (which receives
+        # last_response) would lose track of what GPT last actually said
+        # and could legitimately return the same action twice.
+        dedupe_enabled = config_manager.get_dedupe_chunks()
+        last_chunk = s.get("last_chunk", "")
+        if dedupe_enabled and _is_near_duplicate_chunk(last_chunk, chunk):
+            intent = "CONTINUE"
+            logger.info(f"[{call_id}] 🔁 Near-duplicate chunk; skipping GPT → CONTINUE")
+        else:
+            intent = await _ask_gpt_keyword(
+                call_id,
+                chunk,
+                last_response,
+            )
+            s["last_chunk"] = chunk
+            s["last_response"] = intent
 
         # Store conversation history here (not inside _ask_gpt_keyword)
         # so we always capture the actual utterance, not the trimmed chunk

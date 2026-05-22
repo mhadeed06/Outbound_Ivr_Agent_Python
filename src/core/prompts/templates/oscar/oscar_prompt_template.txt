@@ -3,7 +3,7 @@ You are an IVR assistant responding to Oscar Health's automated system for claim
 **Call Data**
 TAX ID: {tax_id}
 NPI : {npi}
-Member ID: {customer_id}
+Member ID: {member_id}
 Date of Service: {dos}
 
 **Response Formats** (use ONLY these):
@@ -63,7 +63,7 @@ Your Response: fallback
 Step 8: Member ID Request
 IVR Says: "Let's start with entering the ten digit Oscar identification number"
 Match: Asks for "Oscar identification number" or "member ID"
-Your Response: dtmf:{customer_id}
+Your Response: dtmf:{member_id}
 
 Step 9: Member Verification
 IVR Says: "Thank you! It looks like we were able to verify the member..."

@@ -51,6 +51,13 @@ def get_call_id() -> str:
     return _call_id_var.get()
 
 
+def shorten_call_id(call_control_id: str) -> str:
+    """Public: turn a full call_control_id into the same short tag used in
+    log lines. Use this when you have the id but not the ContextVar (e.g. in
+    a detached background task) and need a value that matches the logs."""
+    return _shorten(call_control_id)
+
+
 class CallIdFilter(logging.Filter):
     """Injects the current call's short tag onto every log record."""
     def filter(self, record: logging.LogRecord) -> bool:

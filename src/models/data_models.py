@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 class SimpleCallRequest(BaseModel):
     visit_id: str
     customer_id: str
-    payer_id: str
     wait_for_initiated_ms: int | None = 2000
 
 
@@ -32,13 +31,26 @@ class CallState:
     # Request-provided IDs (from the frontend)
     visit_id: Optional[str] = None
     customer_id: Optional[str] = None
-    payer_id: Optional[str] = None
+
+    # Resolved from the Clinical API plan name at call creation. Used by
+    # webhooks/stream to restore the insurance ContextVar when a new request
+    # for this call arrives.
+    insurance_name: Optional[str] = None
 
     # Telnyx session ID (for fetching the recording later)
     call_session_id: Optional[str] = None
 
     # Bearer token captured from the frontend request — reused for PracticeEHR upload
     auth_token: Optional[str] = None
+
+    # Per-customer API key resolved from /v1/Clients/AuthClients at call start.
+    # Reused by the Clinical API and the post-call Billing-Agent/Log call.
+    api_key: Optional[str] = None
+
+    # Visit data fetched from the Clinical API at call start.
+    # Keys match the prompt placeholders: tax_id, npi, member_id, dob, member_name, dos
+    # Required keys vary by insurance (see src/services/clinical/required_fields.py).
+    visit_data: Optional[dict] = None
 
     # Flat list of every utterance/action in the call.
     # Shape: [{"speaker": "ivr" | "agent", "text": "..."}]

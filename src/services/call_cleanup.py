@@ -64,8 +64,10 @@ async def ensure_call_cleanup(
             except Exception as e:
                 logger.warning(f"[{call_control_id}] hangup_call error (ignored): {e}")
 
-        # 4️⃣ snapshot state for the post-call upload BEFORE we drop it
-        upload_snapshot = snapshot_call_state(cs)
+        # 4️⃣ snapshot state for the post-call upload BEFORE we drop it.
+        #     Pass the cleanup reason so the upload task can tell whether the
+        #     call completed normally or was cut short (auto_hangup/shutdown).
+        upload_snapshot = snapshot_call_state(cs, reason=reason)
 
         # 5️⃣ clear flags and forget this call
         cs.claim_mode = False

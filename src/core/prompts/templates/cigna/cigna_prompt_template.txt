@@ -22,7 +22,7 @@ Call Information
 ***
 TAX ID {tax_id}
 NPI: {npi}
-Customer ID :{customer_id}
+Customer ID :{member_id}
 DOB:{dob}
 Member Name: {member_name}
 DOS: {dos}
@@ -43,53 +43,57 @@ Phase 2: Tax ID Request
     Your Response: value: {tax_id}
 
 Phase 3: Tax ID Confirmation
-    IVR Prompt: "Thank you" (Tax ID confirmation)
+    IVR Prompt: You said {tax_id} is that right, *If the ID given by IVR doesnot match with tax_id, then return dtmf: 2
     Your Response: dtmf: 1
 
-    IVR PROMPT: How may i Help you, you can say things like claims information or eligibility
+    IVR PROMTP: Sorry I didn't hear that please say yes or no was the tax ID you provided {tax_id}, *If the ID given by IVR doesnot match with tax_id, then return dtmf: 2
+    Your response: dtmf: 1 
+
+
+Phase 4: IVR PROMPT: How may i Help you, you can say things like claims information or eligibility
     Your Response: say: Claims 
 
-Phase 4: Main Menu Selection
+Phase 5: Main Menu Selection
     IVR Prompt: "Please say claims information or press 1 , 2.say Eligibility or press 2 . 3. CO=overed services. 4. AQuthorization. and you will have some other option, we will focus on claims, if the line conatin claims, if there is an option of claims, then say claims or press the digit associated with claims ."
     Your Response:  dtmf: 1
 
-Phase 5: Customer ID OR Social security number Request
+Phase 6: Customer ID OR Social security number Request
     IVR Prompt: "IF THE IVR PROMPT INCLUDES THESE  ***please say the customer ID if the ID or Social Security number does not include letters you can enter it using your telephone keypad**."
-    Your Response: value: {customer_id}
+    Your Response: value: {member_id}
 
-    IVR Prompt: "Sorry I didn't get that with the ID you entered {customer_id}"  *If the ID given by IVR doesnot match with customer_id, then return say: no
-    Your Response: confirm: yes
+    IVR Prompt: "Sorry I didn't get that with the ID you entered {member_id}"  *If the ID given by IVR doesnot match with customer_id, then return dtmf: 2
+    Your Response: dtmf: 1
 
 
-Phase 6: Patient Date of Birth Request
+Phase 7: Patient Date of Birth Request
     IVR Prompt: "And, what's your patient's full date of birth? OR IT MAY SAY THE DOB AND ASK TO CONFIRM IT"
     Your Response: value: {dob}
 
 
-Phase 7: Patient Name Confirmation
+Phase 8: Patient Name Confirmation
     IVR Prompt: "The patient you're calling about is EDWARD DE LA ROSA *s(pelling of the name may be differnet ). Is that right?"
     Your Response: dtmf: 1  or say: yes
 
 
-Phase 8: Date of Service Request 
+Phase 9: Date of Service Request 
     (Ivr may provide an exmaple dos, donot say that, say the one that is present in the call information)
     IVR Prompt: "Now, Whats the Date of service, "   OR   "All right medical if you're calling to request an adjustment on your claim you can now submit that request at Cigna for hcp.com all you need to do is search for your claim and click start a reconsideration I'll need to look up the claim you're calling about what's the date of service"
     Your Response: value: {dos}  (Donot provide any other date, just provide this date,)
 
-Phase 9: Retry Date of Service Request 
+Phase 10: Retry Date of Service Request 
     IVR Prompt: "Sorry I didn't hear you say the date of service like January 12th 2019 or enter it like 01122019 to search by month just say the month like April or enter 04"
     Your Response: value: {dos} (Donot provide any other date, just provide this date)
 
     
-phase 10:
+phase 11:
     IVR: "Next I need to know what type of coverage this is about is this about medical vision"
     Your Response: say: medical
 
-Phase 10: Service Type Confirmation
+Phase 12: Service Type Confirmation
     IVR Prompt: "This patient has medical dental pharmacy and mental health substance abuse products which do you want to hear claims for"
     Your Response: say: medical
 
-Phase 11: 
+Phase 13: 
     IVR: OK one claim status or two the mailing address
     Your Response: say: claim status
     
