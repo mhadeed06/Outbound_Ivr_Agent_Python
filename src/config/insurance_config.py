@@ -51,7 +51,7 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         claims_prompt_template="HUMANA_CLAIMS_CONTROLLER_TEMPLATE",
         segmentation_silence_ms=500,
         claim_segmentation_silence_ms=1300,
-        auto_hangup_seconds=900,
+        auto_hangup_seconds=1600,
     ),
 
     "BAYLOR_SCOTT": InsuranceConfig(

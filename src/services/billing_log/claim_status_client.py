@@ -65,7 +65,7 @@ async def post_ivr_claim_status(
         logger.error("No customer_id for IVR/ClaimStatus — skipping")
         return False
 
-    url = f"{base_url}/IVR/ClaimStatus"
+    url = f"{base_url}/api/v1/IVR/ClaimStatus"
     headers = {
         "x-customer-id": str(customer_id),
         "Authorization": f"bearer {bearer_token}",

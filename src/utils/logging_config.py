@@ -117,6 +117,11 @@ def setup_logging():
     """
     dictConfig(logging_config)
 
+    # Quiet noisy third-party loggers that print full URLs of every HTTP call
+    # (would leak endpoint URLs — and sometimes path-embedded IDs — to logs).
+    for noisy in ("httpx", "httpcore", "urllib3", "azure"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 def get_session_logger(session_id: str) -> logging.Logger:
     """Return a logger dedicated to a specific WebSocket session."""

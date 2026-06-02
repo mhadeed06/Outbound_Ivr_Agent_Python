@@ -222,16 +222,20 @@ class AzureRealtimeSttService:
             )
 
     def _handle_session_started(self, evt):
-        print(f"Speech session started")
+        print(f"[STT {self.websocket_id}] Speech session started")
 
     def _handle_session_stopped(self, evt):
-        print(f"Speech session stopped")
+        print(f"[STT {self.websocket_id}] Speech session stopped (session_id={getattr(evt, 'session_id', '?')})")
 
     def _handle_canceled(self, evt):
-        print(f"Recognition canceled: {evt.reason}")
-        if evt.reason == speechsdk.CancellationReason.Error and self.on_error:
-            err = f"Error: {evt.error_details}"
-            asyncio.create_task(self.on_error(err))
+        # Always print the full cancellation context. If STT bails without
+        # producing transcripts, this is the line that explains why.
+        reason = getattr(evt, "reason", None)
+        details = getattr(evt, "error_details", "")
+        code = getattr(evt, "error_code", "")
+        print(f"[STT {self.websocket_id}] ❌ Recognition canceled: reason={reason} code={code} details={details!r}")
+        if reason == speechsdk.CancellationReason.Error and self.on_error:
+            asyncio.create_task(self.on_error(f"Error: {details}"))
 
     def stop(self):
         """Stops recognition and cleans up."""

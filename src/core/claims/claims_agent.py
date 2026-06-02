@@ -68,59 +68,24 @@ async def end_session(call_id: str, *, already_locked: bool = False):
     async def _finish():
         _finalize_current(s)
 
-        # Full claim transcript
+        # Build the data we persist on call_state for the post-call upload.
+        # Verbose terminal dumps (full transcript / claims / conversation
+        # history) were removed — they're available in the uploaded JSON
+        # transcript and the recording.
         full_claims_text = "\n\n--- CLAIM BREAK ---\n\n".join(s.get("claims", []))
-
-        # Raw full transcript
         raw_full_transcript = " ".join(s.get("full_transcript", []))
 
-        logger.info(f"\n========== CALL ENDED: {call_id} ==========")
-        logger.info(f"\nFULL CLAIMS TRANSCRIPT:\n{full_claims_text if full_claims_text else '[No claims captured]'}")
-        logger.info(f"\nRAW FULL TRANSCRIPT:\n{raw_full_transcript if raw_full_transcript else '[No transcript captured]'}")
-
-        # Conversation history (if available from active calls)
         try:
-            if _active_calls:
-                call_state = _active_calls.get(call_id)
-            else:
-                call_state = None
+            call_state = _active_calls.get(call_id) if _active_calls else None
         except Exception:
             call_state = None
 
-        # Store finalized claims data and full transcript on call_state
         if call_state:
             call_state.finalized_claims = s.get("claims", [])
             call_state.full_claims_transcript = full_claims_text
             call_state.raw_full_transcript = raw_full_transcript
 
-        conv_lines = []
-        if call_state and getattr(call_state, "conversation_history", None):
-            clean_steps = []
-            for step in call_state.conversation_history:
-                if not isinstance(step, dict):
-                    continue
-
-                t = (step.get("transcript") or "").strip()
-                r = (step.get("gpt_result") or "").strip()
-
-                # Skip malformed/old entries that don't match the new schema
-                if not t and not r:
-                    continue
-
-                clean_steps.append({
-                    "transcript": t,
-                    "gpt_result": r,
-                })
-            for i, step in enumerate(clean_steps, start=1):
-                conv_lines.append(
-                    f"{i}. Transcript: {step['transcript']}\n   GPT: {step['gpt_result']}"
-                )
-        conv_text = "\n".join(conv_lines)
-        logger.info(
-            f"\nCONVERSATION HISTORY ({len(conv_lines)} steps):\n"
-            f"{conv_text if conv_text else '[No conversation history]'}"
-        )
-        logger.info("===========================================")
+        logger.info(f"📦 Claims session ended: {call_id} (claims captured: {len(s.get('claims', []))})")
 
         s["active"] = False
 

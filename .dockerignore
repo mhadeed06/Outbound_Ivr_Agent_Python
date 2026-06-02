@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual envs (we install fresh inside the container)
+venv/
+.venv/
+env/
+
+# Secrets — passed at runtime via --env-file, never baked in
+.env
+*.env.local
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs / runtime data
+logs/
+*.log
+
+# Build / package
+build/
+dist/
+*.tar.gz
+
+# Docker itself
+Dockerfile
+.dockerignore
+
+# Misc
+README.md
+.claude/

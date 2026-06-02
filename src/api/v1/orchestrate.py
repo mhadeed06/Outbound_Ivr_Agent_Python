@@ -4,10 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Dict, Callable
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-
 from src.auth.jwt_auth import verify_token
 from src.config.insurance_config import (
     config_manager,

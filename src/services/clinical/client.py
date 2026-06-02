@@ -97,8 +97,10 @@ async def fetch_visit_data(visit_id: str, auth_token: str, api_key: str) -> dict
         raise ClinicalApiError(f"No visit data found for visit_id={visit_id}")
 
     normalized = _normalize(api_data)
+    # NOTE: do NOT log PHI (member name, member ID, DOB, DOS) — only the visit
+    # identifier and the plan short name (used for routing, not patient-level).
     logger.info(
-        f"✅ Clinical visit data: member_name={normalized.get('member_name')!r} "
-        f"member_id={normalized.get('member_id')} dos={normalized.get('dos')}"
+        f"✅ Clinical visit data received for visit_id={visit_id} "
+        f"plan={normalized.get('plan_short_name')!r}"
     )
     return normalized
