@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import queue
 import threading
 import os
@@ -10,6 +11,8 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 AZURE_SPEECH_KEY    = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
@@ -120,9 +123,9 @@ class AzureRealtimeSttService:
                 speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
                 str(segmentation_silence_ms)
             )
-            print(f"[{self.websocket_id}] 🔄 Updated Speech_SegmentationSilenceTimeoutMs to {segmentation_silence_ms} ms")
+            logger.info(f"[{self.websocket_id}] 🔄 Updated Speech_SegmentationSilenceTimeoutMs to {segmentation_silence_ms} ms")
         except Exception as e:
-            print(f"[{self.websocket_id}] ⚠️ Live update failed: {e}")
+            logger.warning(f"[{self.websocket_id}] ⚠️ Live update failed: {e}")
             self._recreate_with_new_timeout(segmentation_silence_ms)
 
     def _recreate_with_new_timeout(self, segmentation_silence_ms: int):
@@ -172,9 +175,9 @@ class AzureRealtimeSttService:
             if was_running:
                 self.recognizer.start_continuous_recognition()
 
-            print(f"[{self.websocket_id}] ✅ Recreated recognizer with {segmentation_silence_ms} ms")
+            logger.info(f"[{self.websocket_id}] ✅ Recreated recognizer with {segmentation_silence_ms} ms")
         except Exception as e:
-            print(f"[{self.websocket_id}] ❌ Recreate recognizer failed: {e}")
+            logger.error(f"[{self.websocket_id}] ❌ Recreate recognizer failed: {e}")
     # ---------- /NEW ------------------------------------------------
 
     def start_continuous_recognition(self):
@@ -189,12 +192,12 @@ class AzureRealtimeSttService:
         """Thread: run the recognizer until stopped."""
         try:
             self.recognizer.start_continuous_recognition()
-            print(f"Started continuous recognition")
+            logger.info(f"[{self.websocket_id}] Started continuous recognition")
             while self.is_running:
                 # Keep thread alive
                 asyncio.run(asyncio.sleep(0.1))
         except Exception as e:
-            print(f"[{self.websocket_id}] Recognition worker error: {e}")
+            logger.error(f"[{self.websocket_id}] Recognition worker error: {e}")
             if self.on_error:
                 asyncio.create_task(self.on_error(str(e)))
 
@@ -204,7 +207,7 @@ class AzureRealtimeSttService:
             try:
                 self.push_stream.write(audio_data)
             except Exception as e:
-                print(f"[{self.websocket_id}] Error feeding audio: {e}")
+                logger.warning(f"[{self.websocket_id}] Error feeding audio: {e}")
 
     def _handle_recognizing(self, evt):
         """Intermediate (partial) results."""
@@ -216,24 +219,24 @@ class AzureRealtimeSttService:
     def _handle_recognized(self, evt):
         """Final results (utterance complete)."""
         if evt.result.text and self.on_final_result:
-            print(f" Final: {evt.result.text}")
+            logger.info(f"[STT {self.websocket_id}] Final: {evt.result.text}")
             self.audio_queue.put(
                 TranscriptionEvent(EventType.FINAL, evt.result.text, self.websocket_id)
             )
 
     def _handle_session_started(self, evt):
-        print(f"[STT {self.websocket_id}] Speech session started")
+        logger.info(f"[STT {self.websocket_id}] Speech session started")
 
     def _handle_session_stopped(self, evt):
-        print(f"[STT {self.websocket_id}] Speech session stopped (session_id={getattr(evt, 'session_id', '?')})")
+        logger.info(f"[STT {self.websocket_id}] Speech session stopped (session_id={getattr(evt, 'session_id', '?')})")
 
     def _handle_canceled(self, evt):
-        # Always print the full cancellation context. If STT bails without
+        # Always log the full cancellation context. If STT bails without
         # producing transcripts, this is the line that explains why.
         reason = getattr(evt, "reason", None)
         details = getattr(evt, "error_details", "")
         code = getattr(evt, "error_code", "")
-        print(f"[STT {self.websocket_id}] ❌ Recognition canceled: reason={reason} code={code} details={details!r}")
+        logger.error(f"[STT {self.websocket_id}] ❌ Recognition canceled: reason={reason} code={code} details={details!r}")
         if reason == speechsdk.CancellationReason.Error and self.on_error:
             asyncio.create_task(self.on_error(f"Error: {details}"))
 
@@ -246,7 +249,7 @@ class AzureRealtimeSttService:
             self.push_stream.close()
         if self.recognition_thread:
             self.recognition_thread.join(timeout=5.0)
-        print(f" Cleanup complete")
+        logger.info(f"[STT {self.websocket_id}] Cleanup complete")
 
     def start_async_event_handler(self, loop: asyncio.AbstractEventLoop):
         """Begin pulling events off the queue on your main loop."""
@@ -263,7 +266,7 @@ class AzureRealtimeSttService:
                 elif event.event_type == EventType.ERROR and self.on_error:
                     await self.on_error(event.text)
             except Exception as e:
-                print(f"[{self.websocket_id}] Error in event handler: {e}")
+                logger.error(f"[{self.websocket_id}] Error in event handler: {e}")
                 break
 
 
