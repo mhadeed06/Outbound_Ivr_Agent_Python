@@ -63,6 +63,13 @@ HEADERS = {
 app = FastAPI()
 setup_logging()
 
+# Ship logs + traces to Azure Application Insights when the connection string
+# is set (Azure App Service injects it once App Insights is enabled in the
+# portal). On local dev the env var is absent and this is a no-op.
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+    from azure.monitor.opentelemetry import configure_azure_monitor
+    configure_azure_monitor(logger_name=None)  # captures the root logger → all our logs
+
 
 logger = logging.getLogger(__name__)
 
