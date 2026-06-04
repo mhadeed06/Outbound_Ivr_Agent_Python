@@ -24,7 +24,6 @@ class InsuranceConfig:
     # races that caused duplicate "Details"/"Next claim" responses on CIGNA).
     dedupe_chunks: bool = False
 
-
 # All insurance configurations
 INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
     "CIGNA": InsuranceConfig(
@@ -81,7 +80,7 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
     ),
 
     # Kept for in-progress development. No payer_id maps to it yet, so it
-    # is unreachable via /orchestrate_call_simple until it's wired up.
+    # is unreachable via /v1/Billing-Agent/Call until it's wired up.
     "HEALTH_FIRST": InsuranceConfig(
         name="HEALTH_FIRST",
         phone_number="+18882502220",
@@ -99,7 +98,7 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
 
 # ── payer_id → insurance mapping ────────────────────────────────────────────
 # Only the insurers whose flow is production-ready. Unknown payer_ids are
-# rejected by /orchestrate_call_simple with a 400 error.
+# rejected by /v1/Billing-Agent/Call with a 400 error.
 PAYER_ID_TO_INSURANCE: Dict[str, str] = {
     "61101": "HUMANA",
     "62308": "CIGNA",
@@ -160,7 +159,7 @@ _active_insurance_var: contextvars.ContextVar[Optional[InsuranceConfig]] = (
 def set_active_insurance(config: InsuranceConfig) -> None:
     """Set the active insurance for the current async task.
     Must be called at each call-entry point:
-      - /orchestrate_call_simple (once the insurance is resolved from the plan name)
+      - /v1/Billing-Agent/Call (once the insurance is resolved from the plan name)
       - /webhooks/calls (restored from CallState.insurance_name)
       - /stream (restored from CallState.insurance_name on 'start')
     """

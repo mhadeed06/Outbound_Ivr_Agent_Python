@@ -50,13 +50,15 @@ def make_orchestrate_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/orchestrate_call_simple")
-    async def orchestrate_call_simple(
+    @router.post("/v1/Billing-Agent/Call")
+    async def create_billing_agent_call(
         request: Request,
         user: dict = Depends(verify_token),
         wait_for_initiated_ms: int = 10000,
     ):
         """
+        POST /v1/Billing-Agent/Call — start an outbound IVR call.
+
         Receive visit_id + customer_id, look up the insurance from the
         Clinical API's plan name, start the Telnyx call, optionally wait
         briefly for 'call.initiated', then return status.

@@ -188,7 +188,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
     prompt_template = get_main_prompt_template()  # Gets correct template for current insurance
 
-    # Visit data was fetched from the Clinical API in /orchestrate_call_simple
+    # Visit data was fetched from the Clinical API in /v1/Billing-Agent/Call
     # and stored on CallState. Required fields were validated there, so by this
     # point visit_data has everything the prompt template needs.
     visit_data = (call_state.visit_data or {}) if call_state else {}
@@ -308,4 +308,4 @@ if __name__ == "__main__":
 #  TO run hit the start_call endpoint
 
 #curl -X POST http://localhost:5000/start_call -H "Content-Type: application/json" -d "{}"
-#curl -X POST "http://localhost:5000/orchestrate_call_simple?wait_for_initiated_ms=10000" -H "Content-Type: application/json" -d "{\"agent_id\":\"AG001\",\"app_id\":\"APP123\"}"
+#curl -X POST "http://localhost:5000/v1/Billing-Agent/Call?wait_for_initiated_ms=10000" -H "Content-Type: application/json" -H "Authorization: Bearer <JWT>" -d "{\"visit_id\":\"...\",\"customer_id\":\"...\"}"

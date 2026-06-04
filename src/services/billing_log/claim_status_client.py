@@ -52,7 +52,7 @@ async def post_ivr_claim_status(
     Never raises — all failures are logged and swallowed.
 
     `bearer_token` is the frontend JWT (the same token the frontend used to
-    call /orchestrate_call_simple).
+    call /v1/Billing-Agent/Call).
     """
     base_url = os.getenv("IVR_CLAIM_STATUS_BASE_URL", "").rstrip("/")
     if not base_url or base_url == "REPLACE_ME":
