@@ -14,7 +14,10 @@ import uuid
 
 from src.services.billing_log.classifier import classify_claim
 from src.services.billing_log.claim_status_client import post_ivr_claim_status
-from src.services.billing_log.log_client import post_billing_log
+from src.services.billing_log.log_client import (
+    post_billing_log,
+    update_billing_log_row,
+)
 from src.services.practice_ehr.telnyx_recording import fetch_recording_wav
 from src.services.practice_ehr.transcript_builder import build_transcript_json
 from src.services.practice_ehr.uploader import upload_file
@@ -49,6 +52,9 @@ async def upload_call_artifacts(snapshot: dict) -> None:
     visit_id = snapshot.get("visit_id")
     auth_token = snapshot.get("auth_token")
     api_key = snapshot.get("api_key")
+    # RefNo reserved at call start by orchestrate.py. May be None if the
+    # initial INSERT failed — in that case we fall back to a single POST.
+    ref_no = snapshot.get("ref_no")
     finalized_claims = snapshot.get("finalized_claims", []) or []
     transcript_lines = len(snapshot.get("full_transcript", []) or [])
     cleanup_reason = snapshot.get("cleanup_reason", "")
@@ -177,20 +183,47 @@ async def upload_call_artifacts(snapshot: dict) -> None:
         )
         logger.info(f"⚠️ Ended before claims flow (reason: {cleanup_reason}) — request_status='{request_status}', not 'no claim'")
 
-    # 4) POST to Billing-Agent/Log ───────────────────────────────────────────
-    data_id = await post_billing_log(
-        request_type="CLAIM_STATUS",
-        transcript_path=transcript_path,
-        recording_path=recording_path,
-        request_status=request_status,
-        claim_status=claim_status,
-        description=description,
-        visit_seq_num=visit_id,
-        customer_id=customer_id,
-        entered_by="AI-Billing-Agent",
-        payer_name=snapshot.get("insurance_name") or "",
-        auth_token=auth_token,
-    )
+    # 4) Update Billing-Agent/Log ────────────────────────────────────────────
+    # Preferred path: PUT the row created at call start (RefNo from snapshot).
+    # Fallback path: if the initial INSERT failed (ref_no is None), do a single
+    # POST so the call is still logged — the frontend won't have a RefNo to
+    # display, but the DB record + downstream IVR/ClaimStatus still happen.
+    data_id = None
+    if ref_no:
+        updated = await update_billing_log_row(
+            ref_no=ref_no,
+            request_status=request_status,
+            claim_status=claim_status,
+            description=description,
+            transcript_path=transcript_path,
+            recording_path=recording_path,
+            auth_token=auth_token,
+        )
+        if updated:
+            data_id = ref_no
+        else:
+            logger.error(
+                f"❌ PUT Billing-Agent/Log/{ref_no} failed — row stays at 'in_progress'. "
+                f"Manual cleanup may be needed."
+            )
+    else:
+        logger.warning(
+            "No RefNo from call start — falling back to single POST to Billing-Agent/Log"
+        )
+        data_id = await post_billing_log(
+            request_type="CLAIM_STATUS",
+            transcript_path=transcript_path,
+            recording_path=recording_path,
+            request_status=request_status,
+            claim_status=claim_status,
+            description=description,
+            visit_seq_num=visit_id,
+            customer_id=customer_id,
+            entered_by="AI-Billing-Agent",
+            payer_name=snapshot.get("insurance_name") or "",
+            auth_token=auth_token,
+        )
+
     if data_id is not None:
         logger.info(f"📊 Billing-Agent/Log data id: {data_id}")
 
@@ -239,6 +272,9 @@ def snapshot_call_state(call_state, reason: str = "") -> dict:
         "visit_id": getattr(call_state, "visit_id", None),
         "auth_token": getattr(call_state, "auth_token", None),
         "api_key": getattr(call_state, "api_key", None),
+        # RefNo reserved at call start. None if initial INSERT failed →
+        # post_call_upload will fall back to a single POST.
+        "ref_no": getattr(call_state, "ref_no", None),
         "full_transcript": list(getattr(call_state, "full_transcript", []) or []),
         "finalized_claims": list(getattr(call_state, "finalized_claims", []) or []),
         # Insurance name (CIGNA/HUMANA/...) — sent as payerName in the Log payload.

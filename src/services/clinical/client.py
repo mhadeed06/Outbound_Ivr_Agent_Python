@@ -101,6 +101,7 @@ async def fetch_visit_data(visit_id: str, auth_token: str, api_key: str) -> dict
     # identifier and the plan short name (used for routing, not patient-level).
     logger.info(
         f"✅ Clinical visit data received for visit_id={visit_id} "
-        f"plan={normalized.get('plan_short_name')!r}"
+        f"plan={normalized.get('plan_short_name')!r} "
+        f"description={normalized.get('plan_description')!r}"
     )
     return normalized

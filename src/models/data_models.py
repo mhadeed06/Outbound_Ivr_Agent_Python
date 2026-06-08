@@ -52,6 +52,13 @@ class CallState:
     # Required keys vary by insurance (see src/services/clinical/required_fields.py).
     visit_data: Optional[dict] = None
 
+    # Billing-Agent/Log row id, created at call start with placeholder values
+    # and PUT-updated with the final outcome at call end. Returned to the
+    # frontend in /v1/Billing-Agent/Call so they can track the call. May be
+    # None if the initial POST to Billing-Agent/Log failed — the call itself
+    # still proceeds; post_call_upload falls back to a single POST in that case.
+    ref_no: Optional[int] = None
+
     # Flat list of every utterance/action in the call.
     # Shape: [{"speaker": "ivr" | "agent", "text": "..."}]
     full_transcript: List[dict] = field(default_factory=list)

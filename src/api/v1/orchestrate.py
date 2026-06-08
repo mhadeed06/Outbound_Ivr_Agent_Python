@@ -12,6 +12,7 @@ from src.config.insurance_config import (
     lookup_by_payer_name,
     set_active_insurance,
 )
+from src.services.billing_log.log_client import create_billing_log_row
 from src.services.clinical.client import ClinicalApiError, fetch_visit_data
 from src.services.clinical.required_fields import missing_fields_for
 from src.services.practice_ehr_auth.client import AuthApiError, fetch_api_key_for_customer
@@ -23,17 +24,23 @@ import src.services.telnyx.client as telnyx_client
 logger = logging.getLogger(__name__)
 
 
-def _respond(succeeded: bool, message: str, http_status: int = 200) -> JSONResponse:
+def _respond(
+    succeeded: bool,
+    message: str,
+    http_status: int = 200,
+    ref_no: int | None = None,
+) -> JSONResponse:
     """Standard frontend response shape — mirrors the inbound agent:
-      {"succeeded": bool, "message": str}
+      {"succeeded": bool, "message": str, "refNo": int | null}
 
-    On failure, `message` carries the upstream error verbatim so the frontend
-    can show it to the user.
+    `refNo` is the Billing-Agent/Log row id reserved for this call. Present on
+    every response made AFTER the initial Log INSERT (success or timeout).
+    Omitted from pre-Log validation errors (no row was created yet).
     """
-    return JSONResponse(
-        {"succeeded": succeeded, "message": message},
-        status_code=http_status,
-    )
+    body: dict = {"succeeded": succeeded, "message": message}
+    if ref_no is not None:
+        body["refNo"] = ref_no
+    return JSONResponse(body, status_code=http_status)
 
 
 def make_orchestrate_router(
@@ -178,6 +185,23 @@ def make_orchestrate_router(
             # Tag every subsequent log line with the short call ID.
             set_call_id(call_control_id)
 
+            # ── create initial Billing-Agent/Log row to reserve a RefNo ──────
+            # Done AFTER Telnyx accepts the call so we don't insert orphan
+            # rows for calls that never made it out. If this fails, ref_no
+            # stays None — the call continues without a RefNo and the
+            # background uploader falls back to a single POST at call end.
+            ref_no = await create_billing_log_row(
+                visit_seq_num=visit_id,
+                customer_id=customer_id,
+                payer_name=insurance.name,
+                auth_token=auth_token,
+            )
+            if ref_no is None:
+                logger.warning(
+                    f"Initial Billing-Agent/Log INSERT failed for call_control_id={call_control_id} "
+                    f"— call continues without a RefNo (will retry as single POST at call end)"
+                )
+
             # ── store call state ─────────────────────────────────────────────
             active_calls[call_control_id] = CallState(
                 call_control_id=call_control_id,
@@ -188,6 +212,7 @@ def make_orchestrate_router(
                 api_key=api_key,
                 insurance_name=insurance.name,
                 visit_data=visit_data,
+                ref_no=ref_no,
             )
 
             auto_hangup_seconds = config_manager.get_auto_hangup_seconds()
@@ -210,9 +235,11 @@ def make_orchestrate_router(
 
             # Traceability log line: all the IDs billing/ops might ask about,
             # in one place so you can grep by visit_id to find call_control_id.
+            plan_description = visit_data.get("plan_description")
             logger.info(
                 f"✅ Call queued | status={status} visit_id={visit_id} customer_id={customer_id} "
                 f"insurance={insurance.name} plan={plan_short_name!r} "
+                f"description={plan_description!r} "
                 f"call_control_id={call_control_id} call_session_id={call_session_id} "
                 f"is_alive={is_alive}"
             )
@@ -220,10 +247,12 @@ def make_orchestrate_router(
             # Map internal status → frontend-friendly {succeeded, message}.
             # "initiated" = IVR actually picked up → succeeded=true.
             # "queued"    = we timed out waiting → mirror inbound's pattern.
+            # Both responses include refNo so the frontend can track the row
+            # regardless of whether the IVR picked up in time.
             if status == "initiated":
-                return _respond(True, "Call answered")
+                return _respond(True, "Call answered", ref_no=ref_no)
             else:
-                return _respond(False, "Call not answered (reason: timeout)")
+                return _respond(False, "Call not answered (reason: timeout)", ref_no=ref_no)
 
         except Exception:
             logger.exception("❌ Unexpected error orchestrating call")
