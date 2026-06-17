@@ -14,9 +14,14 @@ from functools import partial
 #from prompt import PROMPT_TEMPLATE
 import src.core.claims.claims_agent as claims_agent
 from src.config.insurance_config import config_manager
-from src.core.prompts.manager import get_main_prompt_template
+from src.core.denials.transition import is_transfer_signal
+from src.core.prompts.manager import (
+    get_denial_prompt_template,
+    get_main_prompt_template,
+)
 from src.models.data_models import CallState, SimpleCallRequest
 import src.services.telnyx.client as telnyx_client
+from src.api.v1.denial_inquiry import make_denial_inquiry_router
 from src.api.v1.orchestrate import make_orchestrate_router
 from src.api.v1.webhooks import make_webhooks_router
 from src.api.v1.stream import make_stream_router
@@ -131,6 +136,97 @@ def append_conversation_step(call_state, transcript: str, gpt_result: str):
         "gpt_result": gpt_result
     })
 
+# ─── denial_inquiry handler ───────────────────────────────────────────────────
+# Separate from handle_user_speech so the existing claim_status flow stays
+# untouched. Routes to one of two prompts (ivr / representative) based on the
+# call's phase. The transition from ivr → representative is triggered by
+# is_transfer_signal() detecting phrases like "transferring you now".
+
+# How many recent turns to include in the rep-phase prompt. Cap keeps the
+# context size reasonable. Each turn ≈ 100-300 tokens.
+_DENIAL_HISTORY_MAX_TURNS = 8
+
+
+def _format_denial_history(call_state, max_turns: int = _DENIAL_HISTORY_MAX_TURNS) -> str:
+    """Format the last N turns of conversation_history for the rep prompt.
+
+    Only includes turns where the bot actually spoke (`say:...` responses) —
+    `fallback`/`endcall` turns are skipped because they didn't produce audio
+    the rep heard. Returns an empty marker when there's no history yet.
+    """
+    history = call_state.conversation_history or []
+    if not history:
+        return "(no prior conversation yet — this is the first turn)"
+
+    lines: list[str] = []
+    for turn in history[-max_turns:]:
+        rep_text = (turn.get("transcript") or "").strip()
+        bot_raw = (turn.get("gpt_result") or "").strip()
+        # Skip turns where bot said nothing audible.
+        if bot_raw.lower() in ("fallback", "endcall"):
+            bot_text = ""
+        elif bot_raw.lower().startswith("say:"):
+            bot_text = bot_raw[4:].strip()
+        else:
+            bot_text = bot_raw
+        if rep_text:
+            lines.append(f"Rep: {rep_text}")
+        if bot_text:
+            lines.append(f"You: {bot_text}")
+    return "\n".join(lines) if lines else "(no prior conversation yet)"
+
+
+async def _handle_denial_speech(call_state, text: str, call_control_id: str):
+    # Phase transition: still in IVR but the IVR is announcing a transfer.
+    # Flip to representative phase BEFORE picking the prompt so the very next
+    # GPT call uses the rep template. Also relax debounce + segmentation
+    # timings — humans speak with longer pauses than IVRs, so the same
+    # timings that work for menu navigation will chop rep speech into
+    # garbled fragments.
+    if call_state.phase == "ivr" and is_transfer_signal(text):
+        call_state.phase = "representative"
+        rep_debounce = config_manager.get_denial_rep_debounce_seconds()
+        rep_seg = config_manager.get_denial_rep_segmentation_silence_ms()
+        call_state.debounce_seconds = rep_debounce
+        call_state.need_debounce_reset = True
+        call_state.segmentation_silence_ms = rep_seg
+        if hasattr(call_state, "azure_stt_session") and call_state.azure_stt_session:
+            call_state.azure_stt_session.update_segmentation_timeout(rep_seg)
+        logger.info(
+            f"🔀 Denial-inquiry phase → representative "
+            f"(debounce={rep_debounce}s, segmentation={rep_seg}ms)"
+        )
+
+    # Pick the right template for the current phase.
+    try:
+        prompt_template = get_denial_prompt_template(call_state.phase)
+    except ValueError as e:
+        logger.error(f"Denial prompt missing: {e}")
+        return
+
+    # Knowledge sheet is fed in fresh every turn so GPT always sees the full
+    # context (provider name, member id, etc.). Set at endpoint entry.
+    denial_data = call_state.denial_data or {}
+
+    # Rep phase template includes a {conversation_history} block — without
+    # it the bot has no memory and will re-introduce itself / repeat answers.
+    # IVR template doesn't use history (each menu prompt is stateless).
+    format_kwargs = {"transcript": text, **denial_data}
+    if call_state.phase == "representative":
+        format_kwargs["conversation_history"] = _format_denial_history(call_state)
+
+    prompt = prompt_template.format(**format_kwargs)
+
+    t0 = time.perf_counter()
+    response = await _call_gpt_api(prompt)
+    append_conversation_step(call_state, text, response)
+    gpt_ms = (time.perf_counter() - t0) * 1000
+    logger.info(f"GPT latency: {gpt_ms:.0f} ms (denial:{call_state.phase})")
+    logger.info(f"GPT response: {response!r}")
+
+    await process_llama_response(response, call_control_id)
+
+
 # ─── 1. handle_user_speech: decorate transcript into a full prompt ────────────
 
 async def handle_user_speech(transcript: str, call_control_id: str):
@@ -145,6 +241,14 @@ async def handle_user_speech(transcript: str, call_control_id: str):
 
     call_state = active_calls.get(call_control_id)
     append_ivr(call_state, text)
+
+    # ── denial_inquiry flow: completely separate code path ──────────────────
+    # If this call was started via /v1/Billing-Agent/Denial-Inquiry, route to
+    # the denial handler and return. The existing claim_status logic below is
+    # never touched for denial calls.
+    if call_state and call_state.flow_type == "denial_inquiry":
+        await _handle_denial_speech(call_state, text, call_control_id)
+        return
 
     # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
@@ -193,18 +297,26 @@ async def handle_user_speech(transcript: str, call_control_id: str):
  
 
 
+    # If the call was cleaned up between STT producing this chunk and us
+    # getting here (common at end-of-call: auto_hangup, websocket disconnect),
+    # there's nothing left to respond to. Bail before formatting the prompt —
+    # otherwise visit_data is {} and prompt.format(...) KeyErrors on the
+    # first {placeholder}.
+    if not call_state:
+        logger.warning("handle_user_speech: call_state gone — skipping (cleanup race)")
+        return
+
     prompt_template = get_main_prompt_template()  # Gets correct template for current insurance
 
     # Visit data was fetched from the Clinical API in /v1/Billing-Agent/Call
     # and stored on CallState. Required fields were validated there, so by this
     # point visit_data has everything the prompt template needs.
-    visit_data = (call_state.visit_data or {}) if call_state else {}
+    visit_data = call_state.visit_data or {}
     prompt = prompt_template.format(transcript=transcript, **visit_data)
 
     t0 = time.perf_counter()
     response = await _call_gpt_api(prompt)
-    if call_state:
-        append_conversation_step(call_state, text, response)
+    append_conversation_step(call_state, text, response)
     gpt_ms = (time.perf_counter() - t0) * 1000
     logger.info(f"GPT latency: {gpt_ms:.0f} ms")
     logger.info(f"GPT response: {response!r}")
@@ -254,6 +366,30 @@ app.include_router(
         # Wrap auto_hangup so dependencies are passed automatically.
         # Note: delay_seconds is supplied by orchestrate.py from the insurance
         # config — the default here is only a safety net.
+        auto_hangup_fn=lambda call_id, delay_seconds: auto_hangup(
+            call_id,
+            active_calls,
+            ensure_call_cleanup,
+            delay_seconds
+        ),
+    )
+)
+
+
+# Mount the denial-inquiry router — same shared state as the main orchestrate
+# router. Same Telnyx + auto_hangup wiring. The endpoint itself short-circuits
+# the Clinical/Auth/Billing-Agent/Log calls; everything else (webhooks, stream,
+# cleanup) is reused unchanged.
+app.include_router(
+    make_denial_inquiry_router(
+        active_calls,
+        initiated_events,
+        TELNYX_BASE_URL=TELNYX_BASE_URL,
+        HEADERS=HEADERS,
+        TEL_FROM=TEL_FROM,
+        CALL_CONTROL_APP_ID=CALL_CONTROL_APP_ID,
+        WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
+        STREAM_BASE_URL=STREAM_BASE_URL,
         auto_hangup_fn=lambda call_id, delay_seconds: auto_hangup(
             call_id,
             active_calls,

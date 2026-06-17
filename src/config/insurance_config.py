@@ -23,6 +23,17 @@ class InsuranceConfig:
     # identical to the last chunk we sent to GPT (handles STT trailing-char
     # races that caused duplicate "Details"/"Next claim" responses on CIGNA).
     dedupe_chunks: bool = False
+    # Denial-inquiry endpoint config. Only used when /v1/Billing-Agent/
+    # Denial-Inquiry hits this insurance. Both must be set for that insurance
+    # to be reachable via the denial-inquiry endpoint.
+    supports_denial_inquiry: bool = False
+    denial_phone_number: Optional[str] = None
+    # Speech timings used when the denial-inquiry call is in "representative"
+    # phase — humans speak with longer pauses than IVRs, so debounce and
+    # segmentation need to be relaxed. Fallback values are applied in
+    # _handle_denial_speech if these are None.
+    denial_rep_debounce_seconds: Optional[float] = None
+    denial_rep_segmentation_silence_ms: Optional[int] = None
 
 # All insurance configurations
 INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
@@ -51,6 +62,10 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         segmentation_silence_ms=500,
         claim_segmentation_silence_ms=1300,
         auto_hangup_seconds=1600,
+        supports_denial_inquiry=True,
+        denial_phone_number="+18004486262",  # from HUMANA denial script PDF
+        denial_rep_debounce_seconds=0.4,
+        denial_rep_segmentation_silence_ms=500,
     ),
 
     "BAYLOR_SCOTT": InsuranceConfig(
@@ -223,6 +238,15 @@ class ConfigManager:
 
     def get_dedupe_chunks(self) -> bool:
         return self.get_config().dedupe_chunks
+
+    # ── Denial-inquiry getters ─────────────────────────────────────────────
+    # Return fallback defaults if the active insurance hasn't set them.
+    # Humans pause more than IVRs → bias toward longer waits.
+    def get_denial_rep_debounce_seconds(self) -> float:
+        return self.get_config().denial_rep_debounce_seconds or 1.5
+
+    def get_denial_rep_segmentation_silence_ms(self) -> int:
+        return self.get_config().denial_rep_segmentation_silence_ms or 1500
 
 
 # Global instance — stateless, reads from ContextVar on every call.

@@ -47,6 +47,16 @@ async def upload_call_artifacts(snapshot: dict) -> None:
     `snapshot` is a dict captured BEFORE active_calls cleanup so we don't
     depend on the CallState still being around.
     """
+    # Denial-inquiry calls are testing-only — no Document upload, no
+    # Billing-Agent/Log row, no IVR/ClaimStatus. Bail before doing any work.
+    flow_type = snapshot.get("flow_type", "claim_status")
+    if flow_type == "denial_inquiry":
+        logger.info(
+            f"⏭ Skipping post-call upload for denial_inquiry call "
+            f"(visit_id={snapshot.get('visit_id')})"
+        )
+        return
+
     call_session_id = snapshot.get("call_session_id")
     customer_id = snapshot.get("customer_id")
     visit_id = snapshot.get("visit_id")
@@ -275,6 +285,9 @@ def snapshot_call_state(call_state, reason: str = "") -> dict:
         # RefNo reserved at call start. None if initial INSERT failed →
         # post_call_upload will fall back to a single POST.
         "ref_no": getattr(call_state, "ref_no", None),
+        # Which kind of call this was. Used to skip the entire upload + log
+        # pipeline for denial_inquiry calls (testing only, no DB writes).
+        "flow_type": getattr(call_state, "flow_type", "claim_status"),
         "full_transcript": list(getattr(call_state, "full_transcript", []) or []),
         "finalized_claims": list(getattr(call_state, "finalized_claims", []) or []),
         # Insurance name (CIGNA/HUMANA/...) — sent as payerName in the Log payload.

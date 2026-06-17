@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, Literal, TYPE_CHECKING
 from pydantic import BaseModel
 import uuid
 
@@ -58,6 +58,24 @@ class CallState:
     # None if the initial POST to Billing-Agent/Log failed — the call itself
     # still proceeds; post_call_upload falls back to a single POST in that case.
     ref_no: Optional[int] = None
+
+    # What kind of call this is. Drives prompt selection, post-call processing,
+    # and which endpoints we call. Existing /v1/Billing-Agent/Call flow keeps
+    # the default ("claim_status") so its behavior is unchanged.
+    flow_type: Literal["claim_status", "denial_inquiry"] = "claim_status"
+
+    # Which sub-phase of a denial_inquiry call we're in. "ivr" = navigating
+    # the menu tree (same prompt style as claim_status). "representative" =
+    # transferred to a human, free-form conversation. Detected by watching
+    # for "transferring you now" / similar in the IVR transcript.
+    # Ignored when flow_type == "claim_status".
+    phase: Literal["ivr", "representative"] = "ivr"
+
+    # Knowledge sheet for denial_inquiry calls — provider/patient/claim facts
+    # fed straight into the representative prompt instead of being fetched
+    # from the Clinical API. Required keys depend on the insurance's denial
+    # template (e.g. provider_name, patient_name, member_id, dos, etc.).
+    denial_data: Optional[dict] = None
 
     # Flat list of every utterance/action in the call.
     # Shape: [{"speaker": "ivr" | "agent", "text": "..."}]
