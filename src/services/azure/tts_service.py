@@ -1,4 +1,5 @@
 import asyncio
+import audioop
 import base64
 import json
 import re
@@ -32,7 +33,7 @@ def _is_code_token(s: str) -> bool:
     return has_letters or digit_ratio >= NUMERIC_HEAVY_RATIO
 
 
-voice_name = "en-US-JennyNeural"
+voice_name = "en-US-AndrewMultilingualNeural"
 
 def _build_ssml_for(text: str) -> str:
     clean = " ".join(text.split())
@@ -41,7 +42,7 @@ def _build_ssml_for(text: str) -> str:
     if _is_date_token(clean):
         return f"""
 <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
-  <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
+  <voice xml:lang="en-US" xml:gender="Male" name="{voice_name}">
     {clean}
   </voice>
 </speak>
@@ -60,7 +61,7 @@ def _build_ssml_for(text: str) -> str:
         inner = f' <break time="{PAUSE_MS_EACH}ms"/> '.join(tokens)
         return f"""
 <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
-  <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
+  <voice xml:lang="en-US" xml:gender="Male" name="{voice_name}">
     {inner}
   </voice>
 </speak>
@@ -69,7 +70,7 @@ def _build_ssml_for(text: str) -> str:
     # 3) Everything else → normal speech
     return f"""
 <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
-  <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
+  <voice xml:lang="en-US" xml:gender="Male" name="{voice_name}">
     {clean}
   </voice>
 </speak>
@@ -109,16 +110,32 @@ async def speak_with_azure(
             ssml = _build_ssml_for(text)
 
             url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
+            # DragonHD voices don't support direct mulaw output (only opus, mp3,
+            # pcm, truesilk per Microsoft docs). Request 16-bit PCM at 8kHz and
+            # convert to mulaw locally before sending to Telnyx. PCM also works
+            # for non-HD voices so this path is universal.
             headers = {
                 "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
                 "Content-Type": "application/ssml+xml",
-                "X-Microsoft-OutputFormat": "raw-8khz-8bit-mono-mulaw",
+                "X-Microsoft-OutputFormat": "raw-8khz-16bit-mono-pcm",
             }
 
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(url, content=ssml, headers=headers)
-                resp.raise_for_status()
-                audio_bytes = resp.content
+                if resp.status_code != 200:
+                    # Surface the response body so misconfigurations (unsupported
+                    # voice, region without DragonHD, malformed SSML) are
+                    # diagnosable instead of just "400 Bad Request".
+                    logger.error(
+                        f"Azure TTS {resp.status_code}: {resp.text[:500]}"
+                    )
+                    resp.raise_for_status()
+                pcm_bytes = resp.content
+
+            # Convert 16-bit PCM @ 8kHz → 8-bit mulaw @ 8kHz. Telnyx's
+            # stream_bidirectional_codec is "PCMU" (mulaw 8kHz), so this is
+            # the format the WebSocket needs.
+            audio_bytes = audioop.lin2ulaw(pcm_bytes, 2)  # width=2 for 16-bit samples
 
             chunk_size = 800
             for offset in range(0, len(audio_bytes), chunk_size):
