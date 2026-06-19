@@ -142,9 +142,12 @@ def append_conversation_step(call_state, transcript: str, gpt_result: str):
 # call's phase. The transition from ivr → representative is triggered by
 # is_transfer_signal() detecting phrases like "transferring you now".
 
-# How many recent turns to include in the rep-phase prompt. Cap keeps the
-# context size reasonable. Each turn ≈ 100-300 tokens.
-_DENIAL_HISTORY_MAX_TURNS = 8
+# How many recent turns to include in the rep-phase prompt. A real denial
+# call has ~15-25 exchanges total (intro + verify + denial reason + follow-up
+# questions + wrap-up). 12 turns covers most of an active call without
+# blowing up token cost — older intro turns add little value once we're
+# deep in follow-up questioning.
+_DENIAL_HISTORY_MAX_TURNS = 12
 
 
 def _format_denial_history(call_state, max_turns: int = _DENIAL_HISTORY_MAX_TURNS) -> str:

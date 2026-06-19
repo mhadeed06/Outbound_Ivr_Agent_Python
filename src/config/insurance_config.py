@@ -63,9 +63,9 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         claim_segmentation_silence_ms=1300,
         auto_hangup_seconds=1600,
         supports_denial_inquiry=True,
-        denial_phone_number="+18004486262",  # from HUMANA denial script PDF
-        denial_rep_debounce_seconds=0.4,
-        denial_rep_segmentation_silence_ms=500,
+        denial_phone_number="+14695812883",  # from HUMANA denial script PDF
+        denial_rep_debounce_seconds=0.8,
+        denial_rep_segmentation_silence_ms=800,
     ),
 
     "BAYLOR_SCOTT": InsuranceConfig(
