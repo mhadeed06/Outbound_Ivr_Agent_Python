@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from src.auth.jwt_auth import verify_token
 from src.config.insurance_config import (
     config_manager,
-    lookup_by_payer_name,
+    lookup_by_payer_id,
     set_active_insurance,
 )
 from src.services.billing_log.log_client import create_billing_log_row
@@ -115,14 +115,22 @@ def make_orchestrate_router(
             except ClinicalApiError as e:
                 return _respond(False, str(e), http_status=400)
 
-            # 3) Derive the insurance from the Clinical API's planShortName.
-            #    Reject if it maps to no supported insurer.
-            plan_short_name = visit_data.get("plan_short_name")
-            insurance = lookup_by_payer_name(plan_short_name)
+            # 3) Derive the insurance from the Clinical API's payerId.
+            #    payer_id is the stable routing key — plan names and
+            #    descriptions can change in the billing DB over time and
+            #    aren't safe for routing decisions.
+            payer_id = visit_data.get("payer_id")
+            if not payer_id:
+                return _respond(
+                    False,
+                    "Payer ID is missing for this visit.",
+                    http_status=400,
+                )
+            insurance = lookup_by_payer_id(payer_id)
             if insurance is None:
                 return _respond(
                     False,
-                    f"Could not determine insurance from plan: {plan_short_name or '(none)'}",
+                    "Billing Agent does not support this payer yet.",
                     http_status=400,
                 )
 
@@ -235,10 +243,11 @@ def make_orchestrate_router(
 
             # Traceability log line: all the IDs billing/ops might ask about,
             # in one place so you can grep by visit_id to find call_control_id.
+            plan_short_name = visit_data.get("plan_short_name")
             plan_description = visit_data.get("plan_description")
             logger.info(
                 f"✅ Call queued | status={status} visit_id={visit_id} customer_id={customer_id} "
-                f"insurance={insurance.name} plan={plan_short_name!r} "
+                f"insurance={insurance.name} payer_id={payer_id!r} plan={plan_short_name!r} "
                 f"description={plan_description!r} "
                 f"call_control_id={call_control_id} call_session_id={call_session_id} "
                 f"is_alive={is_alive}"

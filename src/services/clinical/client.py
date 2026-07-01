@@ -40,6 +40,12 @@ def _normalize(api_data: dict) -> dict:
         "dob":               _strip_time(api_data.get("dob")),
         "member_name":       api_data.get("memberName"),
         "dos":               _strip_time(api_data.get("dos")),
+        # payer_id is the authoritative routing key — insurance is resolved
+        # from this, NOT from the plan name (names/descriptions change over
+        # time in the billing DB; payer IDs are stable).
+        "payer_id":          api_data.get("payerId"),
+        # plan_short_name / plan_description are kept for logging and future
+        # display purposes but must NOT be used for routing decisions.
         "plan_short_name":   api_data.get("planShortName"),
         "plan_description":  api_data.get("planDescription"),
     }
@@ -98,9 +104,11 @@ async def fetch_visit_data(visit_id: str, auth_token: str, api_key: str) -> dict
 
     normalized = _normalize(api_data)
     # NOTE: do NOT log PHI (member name, member ID, DOB, DOS) — only the visit
-    # identifier and the plan short name (used for routing, not patient-level).
+    # identifier, payer_id (used for routing), and the plan name/description
+    # for observability.
     logger.info(
         f"✅ Clinical visit data received for visit_id={visit_id} "
+        f"payer_id={normalized.get('payer_id')!r} "
         f"plan={normalized.get('plan_short_name')!r} "
         f"description={normalized.get('plan_description')!r}"
     )
