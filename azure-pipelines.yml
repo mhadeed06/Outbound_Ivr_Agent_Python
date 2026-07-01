@@ -23,7 +23,7 @@ stages:
           - task: Docker@2
             displayName: Build and Push Docker Image
             inputs:
-              containerRegistry: 'SvcConn-DockerRegistry-2026-new'
+              containerRegistry: 'SvcConn-DockerRegistry-2026'
               repository: $(acr_repo)
               command: 'buildAndPush'
               Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
