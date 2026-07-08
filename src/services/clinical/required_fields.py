@@ -11,6 +11,7 @@ REQUIRED_FIELDS_BY_INSURANCE: Dict[str, List[str]] = {
     "HUMANA":       ["tax_id", "npi", "member_id", "dob", "member_name", "dos"],
     "BAYLOR_SCOTT": ["tax_id", "npi", "member_id", "dob", "member_name", "dos"],
     "OSCAR":        ["tax_id", "npi", "member_id", "dos"],
+    "UHC":          ["npi", "member_id", "dob", "member_name", "dos"],
 }
 
 

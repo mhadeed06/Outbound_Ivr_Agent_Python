@@ -6,6 +6,7 @@ _CLAIMS_PROMPT_FILES = {
     "BAYLOR_SCOTT_CLAIMS_CONTROLLER_TEMPLATE": "baylor_scott/baylor_scott_claims_controller_template",
     "OSCAR_CLAIMS_CONTROLLER_TEMPLATE": "oscar/oscar_claims_controller_template",
     "HEALTH_FIRST_CLAIMS_CONTROLLER_TEMPLATE": "health_first/health_first_claims_controller_template",
+    "UHC_CLAIMS_CONTROLLER_TEMPLATE": "uhc/uhc_claims_controller_template",
 }
 
 def get_claims_prompt(prompt_name: str) -> str:

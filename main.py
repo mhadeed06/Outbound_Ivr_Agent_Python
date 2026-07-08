@@ -18,6 +18,7 @@ from src.core.prompts.manager import get_main_prompt_template
 from src.models.data_models import CallState, SimpleCallRequest
 import src.services.telnyx.client as telnyx_client
 from src.api.v1.orchestrate import make_orchestrate_router
+from src.api.v1.orchestrate_test import make_orchestrate_test_router
 from src.api.v1.webhooks import make_webhooks_router
 from src.api.v1.stream import make_stream_router
 #from services.azure_tts_service import speak_with_azure
@@ -254,6 +255,30 @@ app.include_router(
         # Wrap auto_hangup so dependencies are passed automatically.
         # Note: delay_seconds is supplied by orchestrate.py from the insurance
         # config — the default here is only a safety net.
+        auto_hangup_fn=lambda call_id, delay_seconds: auto_hangup(
+            call_id,
+            active_calls,
+            ensure_call_cleanup,
+            delay_seconds
+        ),
+    )
+)
+
+
+# Mount the DEV/TEST orchestrate router — same shared state as the main
+# router, but bypasses Clinical / Auth / Billing-Agent/Log so we can test
+# new insurances before the Clinical API has data for them. All other
+# runtime paths (webhooks, stream, cleanup) are reused unchanged.
+app.include_router(
+    make_orchestrate_test_router(
+        active_calls,
+        initiated_events,
+        TELNYX_BASE_URL=TELNYX_BASE_URL,
+        HEADERS=HEADERS,
+        TEL_FROM=TEL_FROM,
+        CALL_CONTROL_APP_ID=CALL_CONTROL_APP_ID,
+        WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
+        STREAM_BASE_URL=STREAM_BASE_URL,
         auto_hangup_fn=lambda call_id, delay_seconds: auto_hangup(
             call_id,
             active_calls,

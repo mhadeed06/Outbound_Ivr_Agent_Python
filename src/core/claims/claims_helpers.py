@@ -16,6 +16,9 @@ def is_claim_not_found(text: str) -> bool:
 CLAIM_START_TRIGGERS = [
     "i found your claim",
     "i found a claim",
+    "i found one claim",
+    "i've found",           # UHC: "I've found N claims for this member"
+    "ive found",            # same, STT-normalized (apostrophe dropped)
     "i found two claims",
     "i found three claims",
     "i found four claims",
@@ -27,6 +30,7 @@ CLAIM_START_TRIGGERS = [
     "please wait for the silence while we locate your claim",
     "We found the requested claim",
     "there is one claim for this date of service",
+    "please press or say which claim",   # UHC multi-claim menu opener
 ]
 
 def is_claim_start(text: str) -> bool:

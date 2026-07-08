@@ -59,6 +59,13 @@ class CallState:
     # still proceeds; post_call_upload falls back to a single POST in that case.
     ref_no: Optional[int] = None
 
+    # Set by /v1/Billing-Agent/Call/Test to indicate this is a dev-mode call
+    # for testing a new insurance before the Clinical API has data for it.
+    # When True: no Billing-Agent/Log row is created, no recording/transcript
+    # uploaded, no IVR/ClaimStatus posted. The actual IVR + STT + prompt +
+    # cleanup path is unchanged — only the DB-writing side effects are skipped.
+    is_test: bool = False
+
     # Flat list of every utterance/action in the call.
     # Shape: [{"speaker": "ivr" | "agent", "text": "..."}]
     full_transcript: List[dict] = field(default_factory=list)

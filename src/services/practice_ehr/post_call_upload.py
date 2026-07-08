@@ -47,6 +47,16 @@ async def upload_call_artifacts(snapshot: dict) -> None:
     `snapshot` is a dict captured BEFORE active_calls cleanup so we don't
     depend on the CallState still being around.
     """
+    # Test calls (started via /v1/Billing-Agent/Call/Test) are dev-only —
+    # no Document API upload, no Billing-Agent/Log row, no IVR/ClaimStatus.
+    # Bail before doing any work.
+    if snapshot.get("is_test"):
+        logger.info(
+            f"⏭ Skipping post-call upload for test call "
+            f"(visit_id={snapshot.get('visit_id')})"
+        )
+        return
+
     call_session_id = snapshot.get("call_session_id")
     customer_id = snapshot.get("customer_id")
     visit_id = snapshot.get("visit_id")
@@ -275,6 +285,8 @@ def snapshot_call_state(call_state, reason: str = "") -> dict:
         # RefNo reserved at call start. None if initial INSERT failed →
         # post_call_upload will fall back to a single POST.
         "ref_no": getattr(call_state, "ref_no", None),
+        # Dev-mode flag — post_call_upload bails immediately if True.
+        "is_test": getattr(call_state, "is_test", False),
         "full_transcript": list(getattr(call_state, "full_transcript", []) or []),
         "finalized_claims": list(getattr(call_state, "finalized_claims", []) or []),
         # Insurance name (CIGNA/HUMANA/...) — sent as payerName in the Log payload.

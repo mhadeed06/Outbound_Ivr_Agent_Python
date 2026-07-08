@@ -79,6 +79,24 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         auto_hangup_seconds=900,
     ),
 
+    # UnitedHealthcare — in active development. Clinical API doesn't yet
+    # have data for UHC payers, so this insurance is currently only reachable
+    # via the /v1/Billing-Agent/Call/Test endpoint (dev-only, inline data).
+    # Once Clinical API is updated, the payer_id mapping below will make it
+    # reachable via the normal /v1/Billing-Agent/Call endpoint automatically.
+    "UHC": InsuranceConfig(
+        name="UHC",
+        phone_number="+18778423210",
+        debounce_seconds=0.5,
+        claim_debounce_seconds=1.5,
+        claims_tail_chars=250,
+        prompt_template="UHC_PROMPT_TEMPLATE",
+        claims_prompt_template="UHC_CLAIMS_CONTROLLER_TEMPLATE",
+        segmentation_silence_ms=800,
+        claim_segmentation_silence_ms=1500,
+        auto_hangup_seconds=1200,
+    ),
+
     # Kept for in-progress development. No payer_id maps to it yet, so it
     # is unreachable via /v1/Billing-Agent/Call until it's wired up.
     "HEALTH_FIRST": InsuranceConfig(
@@ -104,6 +122,7 @@ PAYER_ID_TO_INSURANCE: Dict[str, str] = {
     "62308": "CIGNA",
     "94999": "BAYLOR_SCOTT",
     "OSCAR": "OSCAR",
+    "87726": "UHC",
 }
 
 SUPPORTED_PAYER_IDS_HELP = ", ".join(
