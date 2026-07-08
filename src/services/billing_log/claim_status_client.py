@@ -1,15 +1,16 @@
 """
-POST to IVR/ClaimStatus — the final per-call status update, sent AFTER
+PATCH to Ivr/ClaimStatus — the final per-call status update, sent AFTER
 Billing-Agent/Log returns the row id (which becomes RefNo here).
 
-POST {IVR_CLAIM_STATUS_BASE_URL}/IVR/ClaimStatus
+PATCH {IVR_CLAIM_STATUS_BASE_URL}/api/v1/Ivr/ClaimStatus
 Headers:
   x-customer-id : <customer_id from the frontend>
-  Authorization : bearer <frontend JWT (the same token used to call us)>
+  Authorization : Bearer <frontend JWT (the same token used to call us)>
+  Content-Type  : application/json
 Body:
   {
-    "VisitSeqNum": <visit_id, number>,
-    "RefNo":       "<Billing-Agent/Log data id>",
+    "VisitSeqNum": <visit_id, long>,
+    "RefNo":       <Billing-Agent/Log data id, long>,
     "Summary":     "<claim summary>",
     "Status":      "<claim status>"
   }
@@ -65,34 +66,42 @@ async def post_ivr_claim_status(
         logger.error("No customer_id for IVR/ClaimStatus — skipping")
         return False
 
-    url = f"{base_url}/api/v1/IVR/ClaimStatus"
+    # NOTE (2026-07): endpoint switched from POST to PATCH, path capitalization
+    # changed from IVR to Ivr, and RefNo is now expected as a long (int) not a
+    # string. x-customer-id header is still required despite what the spec
+    # doc says — verified via Postman that removing it produces an error.
+    url = f"{base_url}/api/v1/Ivr/ClaimStatus"
     headers = {
         "x-customer-id": str(customer_id),
-        "Authorization": f"bearer {bearer_token}",
+        "Authorization": f"Bearer {bearer_token}",
         "Content-Type": "application/json",
     }
     ivr_status = _to_ivr_status(status)  # map internal → endpoint enum
     payload = {
         "VisitSeqNum": _as_int(visit_seq_num),
-        "RefNo": str(ref_no),
+        "RefNo": _as_int(ref_no),
         "Summary": summary,
         "Status": ivr_status,
     }
 
     logger.info(
-        f"📮 POST IVR/ClaimStatus VisitSeqNum={payload['VisitSeqNum']} "
+        f"📮 PATCH IVR/ClaimStatus VisitSeqNum={payload['VisitSeqNum']} "
         f"RefNo={payload['RefNo']!r} Status={ivr_status!r} (from {status!r})"
     )
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
+            resp = await client.patch(url, headers=headers, json=payload)
     except Exception as e:
         logger.exception(f"❌ IVR/ClaimStatus request exception: {e}")
         return False
 
+    # HTTP-level failure (server crash, gateway timeout, etc.) — response
+    # body is likely not the standard {Success,Message,ErrorCode} shape.
     if resp.status_code != 200:
-        logger.error(f"❌ IVR/ClaimStatus failed ({resp.status_code}): {resp.text[:500]}")
+        logger.error(
+            f"❌ IVR/ClaimStatus HTTP {resp.status_code}: {resp.text[:500]}"
+        )
         return False
 
     try:
@@ -101,9 +110,14 @@ async def post_ivr_claim_status(
         logger.error(f"❌ IVR/ClaimStatus returned non-JSON: {e}")
         return False
 
-    # Their response uses capital-S "Success"
+    # Business-level failure — server returned 200 but Success=false.
+    # Their contract: {"Success": bool, "Message": str, "ErrorCode": str?}
     if not body.get("Success"):
-        logger.error(f"❌ IVR/ClaimStatus Success=false: {body}")
+        msg = body.get("Message") or "(no message)"
+        err_code = body.get("ErrorCode") or "(no code)"
+        logger.error(
+            f"❌ IVR/ClaimStatus Success=false | Message={msg!r} ErrorCode={err_code!r}"
+        )
         return False
 
     logger.info(f"✅ IVR/ClaimStatus OK: {body.get('Message')!r}")
