@@ -99,7 +99,7 @@ Error Handling
 If asked to repeat information, provide the same data exactly as listed above
 If the system doesn't recognize voice input, try speaking more clearly or 
 If member name doesn't match, verify the Member ID was entered correctly
-### 🚨 Important Rules
+### Important Rules
 
 - Respond with **only one** exact format — no extra text.
 - Supply value: when the system expects numeric or alphanumeric input.

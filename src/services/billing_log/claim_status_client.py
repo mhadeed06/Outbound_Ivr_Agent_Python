@@ -30,6 +30,10 @@ _STATUS_MAP = {
     "denied": "DENIED",
     "unknown": "UNKNOWN",
     "no claim": "NOT ON FILE",
+    # Failure-mode statuses added 2026-07 — sent when the call couldn't
+    # reach a real claim outcome, so the frontend still gets an update.
+    "patient not found": "PATIENT NOT FOUND",
+    "call failed": "CALL FAILED",
 }
 
 

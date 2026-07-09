@@ -14,6 +14,10 @@ import uuid
 
 from src.services.billing_log.classifier import classify_claim
 from src.services.billing_log.claim_status_client import post_ivr_claim_status
+from src.services.billing_log.failure_classifier import (
+    build_plain_transcript,
+    classify_failure,
+)
 from src.services.billing_log.log_client import (
     post_billing_log,
     update_billing_log_row,
@@ -144,19 +148,30 @@ async def upload_call_artifacts(snapshot: dict) -> None:
     storage_note = f" [Storage issue: {'; '.join(errors)}. call_id={call_tag}]" if errors else ""
 
     if is_incomplete:
-        # Cut short by timeout/shutdown. Data is unreliable — don't classify.
+        # Call was cut short (auto_hangup / shutdown). Even if some claims were
+        # captured before the cut, we can't trust the summary — the TRUE
+        # status is usually in the LAST claim of the call, and any partial
+        # capture could mislead the billing team. Always mark as failure.
         request_status = REQUEST_STATUS_FAILED
-        claim_status = ""
-        description = (
-            f"Call did not complete (reason: {cleanup_reason}) — verification may "
-            f"have stalled, looped, or hit the time limit; result is incomplete."
-            f"{(' ' + 'Storage issues: ' + '; '.join(errors) + '.') if errors else ''}"
-            f" call_id={call_tag}"
+        plain_transcript = build_plain_transcript(
+            snapshot.get("full_transcript") or []
         )
-        logger.info(f"⚠️ Incomplete call ({cleanup_reason}) — request_status='{request_status}', claim status skipped")
+        failure = await classify_failure(
+            transcript=plain_transcript,
+            cleanup_reason=cleanup_reason,
+            call_tag=call_tag,
+        )
+        claim_status = failure["status"]           # usually "call failed"
+        description = failure["description"]
+        if errors:
+            description = f"{description} Storage issues: {'; '.join(errors)}."
+        logger.info(
+            f"⚠️ Incomplete call ({cleanup_reason}) → claim_status={claim_status!r}"
+        )
 
     elif finalized_claims:
         # We reached the claims flow and captured claim(s) → classify.
+        # (Existing successful path — unchanged.)
         request_status = REQUEST_STATUS_SUCCESS
         result = await classify_claim(finalized_claims)
         claim_status = result["status"]
@@ -164,24 +179,32 @@ async def upload_call_artifacts(snapshot: dict) -> None:
 
     elif cleanup_reason == CLAIMS_NOT_FOUND_REASON:
         # The IVR explicitly told us there are no claims for this patient.
+        # (Existing successful path — unchanged.)
         request_status = REQUEST_STATUS_SUCCESS
         claim_status = "no claim"
         description = "No claims found for this patient." + storage_note
 
     else:
-        # Ended before we ever reached/finished the claims flow (IVR error,
-        # transfer, "couldn't hear you", early endcall, etc). We do NOT know
-        # whether claims exist — so this is NOT "no claim".
+        # Any other failure (ended-before-claims-flow, IVR verification
+        # failure, agent-routed, etc.) → run the failure classifier so the
+        # frontend still gets an actionable status update.
         request_status = REQUEST_STATUS_FAILED
-        claim_status = ""
-        description = (
-            "Call ended before the claim status could be determined — the IVR "
-            "could not process the request, transferred the call, or it ended "
-            "early. Whether claims exist is unknown."
-            f"{(' ' + 'Storage issues: ' + '; '.join(errors) + '.') if errors else ''}"
-            f" call_id={call_tag}"
+        plain_transcript = build_plain_transcript(
+            snapshot.get("full_transcript") or []
         )
-        logger.info(f"⚠️ Ended before claims flow (reason: {cleanup_reason}) — request_status='{request_status}', not 'no claim'")
+        failure = await classify_failure(
+            transcript=plain_transcript,
+            cleanup_reason=cleanup_reason,
+            call_tag=call_tag,
+        )
+        claim_status = failure["status"]           # "patient not found" | "call failed"
+        description = failure["description"]
+        if errors:
+            description = f"{description} Storage issues: {'; '.join(errors)}."
+        logger.info(
+            f"⚠️ Failure classified (reason: {cleanup_reason!r}) → "
+            f"claim_status={claim_status!r}"
+        )
 
     # 4) Update Billing-Agent/Log ────────────────────────────────────────────
     # Preferred path: PUT the row created at call start (RefNo from snapshot).
@@ -228,10 +251,13 @@ async def upload_call_artifacts(snapshot: dict) -> None:
         logger.info(f"📊 Billing-Agent/Log data id: {data_id}")
 
         # 5) Final status update → IVR/ClaimStatus ────────────────────────────
-        # RefNo is the Billing-Agent/Log row id (data_id). Only send on a
-        # SUCCESSFUL call: the endpoint requires a non-null Status, and on a
-        # failed/incomplete call claim_status is empty (nothing to report).
-        if request_status == REQUEST_STATUS_SUCCESS and claim_status:
+        # RefNo is the Billing-Agent/Log row id (data_id). We now ALWAYS send
+        # PATCH when we have a claim_status — success cases (PAID / DENIED /
+        # etc.) and failure cases (PATIENT NOT FOUND / CALL FAILED / etc.).
+        # The frontend always gets an outcome update; only skip when we truly
+        # have nothing (empty claim_status — shouldn't happen after the
+        # failure-classifier change, but defensively guard anyway).
+        if claim_status:
             await post_ivr_claim_status(
                 visit_seq_num=visit_id,
                 ref_no=data_id,
@@ -242,8 +268,8 @@ async def upload_call_artifacts(snapshot: dict) -> None:
             )
         else:
             logger.info(
-                f"ℹ️ Skipping IVR/ClaimStatus — call not successful "
-                f"(request_status={request_status!r}, claim_status={claim_status!r})"
+                f"ℹ️ Skipping IVR/ClaimStatus — no claim_status "
+                f"(request_status={request_status!r})"
             )
     else:
         logger.warning("No RefNo from Billing-Agent/Log — skipping IVR/ClaimStatus")

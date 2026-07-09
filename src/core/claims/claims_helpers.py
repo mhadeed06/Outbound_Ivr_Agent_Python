@@ -23,7 +23,11 @@ CLAIM_START_TRIGGERS = [
     "here's the first one",
     "here is the first one",
     "the first one was for service",
-    "the first claim",
+    # NOTE: "the first claim" was removed because it caused false positives.
+    # Example: CIGNA IVR said "if this is the first claim you filed with this
+    # tax ID..." while REJECTING the tax ID — the substring match fired
+    # claim_mode incorrectly, causing the call to be logged as a "successful
+    # unknown" claim rather than a failed verification.
     "please wait for the silence while we locate your claim",
     "We found the requested claim",
     "there is one claim for this date of service",

@@ -15,7 +15,7 @@ Allowed Response Formats:
 ***********
 **Rules**: Only use one of the above formats—no extra text.
 
-### 🗂️ Call Flow Outline
+### Call Flow Outline
 
 Call Information
 ***
@@ -96,7 +96,7 @@ Error Handling
 If asked to repeat information, provide the same data exactly as listed above
 
 
-### 🚨 Important Rules
+### Important Rules
 
 - Respond with **only one** exact format — no extra text.
 - Supply value: when the system expects numeric or alphanumeric input.
