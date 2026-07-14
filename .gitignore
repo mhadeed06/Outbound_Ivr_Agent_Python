@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+# Virtual environment
+.venv/
+venv/
+# Environment variables
+.env
+# Test file
+test.py
+
+.env.qa
+.env.prod
+config.json
