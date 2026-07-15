@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import logging
 import threading
 import os
@@ -49,10 +50,12 @@ class AzureRealtimeSttService:
         self.push_stream: Optional[PushAudioInputStream] = None
         self.is_running = False
         self.recognition_thread: Optional[threading.Thread] = None
-        # Main event loop, captured when the async event handler is wired up.
-        # SDK callback threads use it to schedule the async result callbacks
-        # (see _dispatch) — no per-call worker thread is held.
+        # Main event loop + the call context (insurance / call-id ContextVars),
+        # both captured when the async event handler is wired up. SDK callback
+        # threads use them to schedule the async result callbacks (see _dispatch)
+        # in the right context — the SDK's own threads carry neither.
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ctx: Optional[contextvars.Context] = None
 
         # Your callbacks
         self.on_partial_result: Optional[Callable[[str], asyncio.Future]] = None
@@ -215,12 +218,13 @@ class AzureRealtimeSttService:
 
     def _dispatch(self, coro):
         """Schedule an async result callback on the main loop from an SDK
-        callback thread. run_coroutine_threadsafe is the thread-safe bridge; the
-        wrapper logs (rather than swallows) any exception. No worker thread is
-        held per call, so this can never park/starve the default executor / DNS,
-        and there is no concurrency ceiling."""
+        callback thread, INSIDE the call context captured at wire-up, so the task
+        (and anything it spawns — the debounce task → handle_user_speech) inherits
+        the insurance / call-id ContextVars. The SDK's own callback thread carries
+        neither. No worker thread is held — no executor/DNS starvation, no ceiling."""
         loop = self._loop
-        if loop is None or loop.is_closed():
+        ctx = self._ctx
+        if loop is None or ctx is None or loop.is_closed():
             # Not wired up yet, or the loop is shutting down — close the coroutine
             # so it isn't GC'd as "never awaited".
             coro.close()
@@ -233,8 +237,21 @@ class AzureRealtimeSttService:
                 logger.error(f"[{self.websocket_id}] STT callback error: {e}")
 
         runner = _runner()
+
+        def _schedule():
+            # Runs on the loop thread inside `ctx`, so the created task copies
+            # `ctx` (insurance + call-id) instead of the SDK thread's empty context.
+            try:
+                loop.create_task(runner)
+            except Exception as e:
+                # Very unlikely on a running loop, but keep the cleanup guarantee
+                # airtight: release both coroutines on any failure.
+                runner.close()
+                coro.close()
+                logger.error(f"[{self.websocket_id}] failed to schedule STT event: {e}")
+
         try:
-            asyncio.run_coroutine_threadsafe(runner, loop)
+            loop.call_soon_threadsafe(_schedule, context=ctx)
         except Exception as e:
             # Loop closed between the check above and scheduling — release both
             # coroutines so neither leaks as "never awaited".
@@ -313,10 +330,13 @@ class AzureRealtimeSttService:
         logger.info(f"[STT {self.websocket_id}] Cleanup complete")
 
     def start_async_event_handler(self, loop: asyncio.AbstractEventLoop):
-        """Capture the main event loop. SDK callback threads schedule the async
-        result callbacks on it directly (see _dispatch) — no pump thread, so no
-        per-call worker is held and DNS resolution can't be starved."""
+        """Capture the main event loop AND the current call context. This runs on
+        the WebSocket task right after set_call_id() / set_active_insurance(), so
+        the snapshot carries those ContextVars; _dispatch schedules the async
+        result callbacks inside it so downstream tasks (handle_user_speech, the
+        debounce task) see the right insurance/call-id. No pump thread is held."""
         self._loop = loop
+        self._ctx = contextvars.copy_context()
 
 
 class AzureRealtimeSttManager:
