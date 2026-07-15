@@ -6,8 +6,8 @@ set -e
 APP_NAME=pehr-ai-billing-agent
 
 # QA Environment
-QA_ACR_NAME=acr1pehrqa
-QA_REGISTRY=acr1pehrqa-emafepdeemc4hph7.azurecr.io
+QA_ACR_NAME=ACRPehrAppsCUS
+QA_REGISTRY=acrpehrappscus-dadmdwhuamagdsgt.azurecr.io
 QA_TAG=qa
 
 # PROD Environment
@@ -28,7 +28,7 @@ if [[ "$1" == "qa" ]]; then
   REGISTRY=$QA_REGISTRY
   TAG=$QA_TAG
   ENV_FILE=".env.qa"
-  az account set --subscription "Sub-DEV-Apps-ENV"
+  az account set --subscription "Sub-PEHR-Prod"
 elif [[ "$1" == "prod" ]]; then
   ACR_NAME=$PROD_ACR_NAME
   REGISTRY=$PROD_REGISTRY

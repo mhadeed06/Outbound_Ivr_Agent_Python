@@ -8,6 +8,8 @@ from typing import Optional
 
 import httpx
 
+from src.services.http_client import get_http_client, request_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,8 +48,11 @@ async def upload_file(
     files = {"file": (filename, file_bytes, content_type)}
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(url, headers=headers, data=form_fields, files=files)
+        client = get_http_client()
+        resp = await client.post(
+            url, headers=headers, data=form_fields, files=files,
+            timeout=request_timeout(read=120),
+        )
 
         if resp.status_code == 200:
             logger.info(f"✅ PracticeEHR upload OK: {file_path}")

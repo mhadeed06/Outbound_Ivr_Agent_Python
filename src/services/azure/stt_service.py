@@ -135,11 +135,10 @@ class AzureRealtimeSttService:
         """
         try:
             was_running = self.is_running
-            if self.recognizer:
-                try:
-                    self.recognizer.stop_continuous_recognition()
-                except Exception:
-                    pass
+            # Fully release the old recognizer (handlers + native connection)
+            # before building the new one, so a timeout change doesn't leak a
+            # Speech Service connection / SNAT port each time it happens.
+            self._disconnect_and_release_recognizer()
 
             # Rebuild config
             speech_config = speechsdk.SpeechConfig(
@@ -240,15 +239,47 @@ class AzureRealtimeSttService:
         if reason == speechsdk.CancellationReason.Error and self.on_error:
             asyncio.create_task(self.on_error(f"Error: {details}"))
 
+    def _disconnect_and_release_recognizer(self):
+        """Detach handlers, stop recognition, and release the native recognizer
+        plus its Speech Service connection so the outbound (SNAT) port is freed
+        promptly instead of lingering until GC finalizes the SDK object."""
+        rec = self.recognizer
+        if not rec:
+            return
+        # Detach handlers first so a teardown-triggered 'canceled'/'stopped'
+        # event can't fire our callbacks (e.g. on_error) while we're closing,
+        # and so the recognizer↔bound-method reference cycle is broken for GC.
+        for signal_name in ("recognizing", "recognized", "session_started",
+                            "session_stopped", "canceled"):
+            try:
+                getattr(rec, signal_name).disconnect_all()
+            except Exception:
+                pass
+        try:
+            rec.stop_continuous_recognition()
+        except Exception:
+            pass
+        # Best-effort: close the underlying websocket now rather than waiting for
+        # GC. Older SDKs may not expose this; the ref drop below still releases it.
+        try:
+            speechsdk.Connection.from_recognizer(rec).close()
+        except Exception:
+            pass
+        self.recognizer = None
+
     def stop(self):
-        """Stops recognition and cleans up."""
+        """Stops recognition and releases the Speech Service connection."""
         self.is_running = False
-        if self.recognizer:
-            self.recognizer.stop_continuous_recognition()
+        self._disconnect_and_release_recognizer()
         if self.push_stream:
-            self.push_stream.close()
+            try:
+                self.push_stream.close()
+            except Exception:
+                pass
+            self.push_stream = None
         if self.recognition_thread:
             self.recognition_thread.join(timeout=5.0)
+            self.recognition_thread = None
         logger.info(f"[STT {self.websocket_id}] Cleanup complete")
 
     def start_async_event_handler(self, loop: asyncio.AbstractEventLoop):

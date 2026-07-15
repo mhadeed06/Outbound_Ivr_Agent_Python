@@ -16,6 +16,8 @@ import os
 
 import httpx
 
+from src.services.http_client import get_http_client, request_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,8 +80,8 @@ async def fetch_visit_data(visit_id: str, auth_token: str, api_key: str) -> dict
     logger.info(f"🔎 Fetching Clinical visit data for visit_id={visit_id}")
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(url, headers=headers)
+        client = get_http_client()
+        resp = await client.get(url, headers=headers, timeout=request_timeout(read=30))
     except Exception as e:
         logger.exception(f"Clinical API request exception: {e}")
         raise ClinicalApiError("Clinical API unreachable")

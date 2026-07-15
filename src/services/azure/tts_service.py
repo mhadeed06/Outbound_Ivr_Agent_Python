@@ -7,6 +7,7 @@ import httpx
 import logging
 
 from src.utils.transcript import append_agent
+from src.services.http_client import get_http_client, request_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -115,10 +116,10 @@ async def speak_with_azure(
                 "X-Microsoft-OutputFormat": "raw-8khz-8bit-mono-mulaw",
             }
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, content=ssml, headers=headers)
-                resp.raise_for_status()
-                audio_bytes = resp.content
+            client = get_http_client()
+            resp = await client.post(url, content=ssml, headers=headers, timeout=request_timeout(read=15))
+            resp.raise_for_status()
+            audio_bytes = resp.content
 
             chunk_size = 800
             for offset in range(0, len(audio_bytes), chunk_size):

@@ -20,6 +20,8 @@ import os
 
 import httpx
 
+from src.services.http_client import get_http_client, request_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,8 +50,8 @@ async def fetch_api_key_for_customer(customer_id: str, auth_token: str) -> str:
     logger.info(f"🔑 Fetching per-customer API key for customer_id={customer_id}")
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=body, headers=headers)
+        client = get_http_client()
+        resp = await client.post(url, json=body, headers=headers, timeout=request_timeout(read=15))
     except Exception as e:
         logger.exception(f"Auth API request exception: {e}")
         raise AuthApiError("Auth API unreachable")

@@ -300,6 +300,13 @@ async def on_shutdown():
         except Exception as e:
             logger.error(f"❌ Cleanup error for {call_id}: {e}")
     stt_manager.cleanup_all()
+    # Let any in-flight post-call uploads finish (bounded) before tearing down
+    # the shared HTTP client, so they aren't cut off or forced to rebuild a
+    # fresh, never-closed client on the way out.
+    from src.services.call_cleanup import drain_pending_uploads
+    from src.services.http_client import aclose_http_client
+    await drain_pending_uploads(timeout=float(os.getenv("SHUTDOWN_UPLOAD_DRAIN_S", "8")))
+    await aclose_http_client()
     logger.info("✅ All calls hung up and STT sessions cleaned up. Goodbye!")
 
 
