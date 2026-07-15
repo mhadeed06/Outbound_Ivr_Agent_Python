@@ -144,6 +144,18 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         return
 
     call_state = active_calls.get(call_control_id)
+
+    # Bail if the call is already gone (late STT final arrived after cleanup).
+    # Without this guard, visit_data becomes {} and the prompt template's
+    # first {placeholder} (usually {tax_id}) triggers a KeyError that surfaces
+    # as "Task exception was never retrieved" in App Insights.
+    if not call_state:
+        logger.warning(
+            f"handle_user_speech: call_state gone for {call_control_id} — "
+            f"skipping (late STT after cleanup)"
+        )
+        return
+
     append_ivr(call_state, text)
 
     # ── claim routing (the only logic in main) ──────────────────────────────

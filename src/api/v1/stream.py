@@ -106,6 +106,11 @@ def make_stream_router(
                 state.debounce_task.cancel()
             #logger.info(f"▶️ Creating NEW debounce task with {state.debounce_time}s timer")
             state.debounce_task = asyncio.create_task(_process_after_quiet())
+            # Expose the task to CallState so ensure_call_cleanup can cancel
+            # it when the call ends. Prevents late STT finals from firing
+            # handle_user_speech for a call that's already been cleaned up.
+            if call_state is not None:
+                call_state.debounce_task = state.debounce_task
 
 
         async def _flush_pending_now():

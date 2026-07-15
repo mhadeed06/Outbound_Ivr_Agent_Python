@@ -70,6 +70,13 @@ class CallState:
     segmentation_silence_ms: int = None
     need_segmentation_reset: bool = False
 
+    # Reference to the currently-running debounce task in stream.py so
+    # ensure_call_cleanup can cancel it when the call ends. Prevents late
+    # STT finals from firing handle_user_speech for a call that's already
+    # been cleaned out of active_calls (would otherwise crash with
+    # KeyError on the first template placeholder).
+    debounce_task: Optional[object] = None
+
     def __post_init__(self):
         if self.debounce_seconds is None:
             self.debounce_seconds = config_manager.get_debounce_seconds()

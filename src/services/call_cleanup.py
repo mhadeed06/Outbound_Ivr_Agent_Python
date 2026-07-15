@@ -51,6 +51,18 @@ async def ensure_call_cleanup(
 
         logger.info(f"🧹 Cleanup [{call_control_id}] due to: {reason}")
 
+        # 0️⃣ cancel any pending stream.py debounce task so a late STT final
+        # can't fire handle_user_speech AFTER we pop this call from
+        # active_calls (was causing KeyError: 'tax_id' from empty visit_data
+        # — see Task exception was never retrieved logs in App Insights).
+        try:
+            debounce_task = getattr(cs, "debounce_task", None)
+            if debounce_task is not None and not debounce_task.done():
+                debounce_task.cancel()
+                logger.info(f"[{call_control_id}] cancelled pending debounce task")
+        except Exception as e:
+            logger.warning(f"[{call_control_id}] debounce cancel error (ignored): {e}")
+
         # 1️⃣ stop claims flow
         try:
             await claims_agent.end_session(call_control_id)
