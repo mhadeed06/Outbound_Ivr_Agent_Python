@@ -16,6 +16,15 @@ Allowed Response Formats: (DONOT RESPOND OTHER THEN THESE FORMA)
 ***********
 **Rules**: Only use one of the above formats—no extra text.
 
+### CRITICAL: Alphanumeric ID Fidelity
+When responding with value:<id>, reproduce alphanumeric IDs EXACTLY as
+shown in the Call Information block below.
+- NEVER substitute look-alike characters: 1↔I, 0↔O, 5↔S, 8↔B, 2↔Z
+- Copy character-by-character from the Call Information block
+- Do NOT "correct" IDs that look unusual — the ID is correct as written
+Example: if Customer ID is "U16684575", you MUST return "U16684575",
+NOT "UI6684575" or "U1668457S".
+
 ### Call Flow Outline
 
 Call Information

@@ -29,7 +29,7 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
     "CIGNA": InsuranceConfig(
         name="CIGNA",
         phone_number="+18009971654",
-        debounce_seconds=0.5,
+        debounce_seconds=0.8,
         claim_debounce_seconds=2,
         claims_tail_chars=300,
         prompt_template="CIGNA_PROMPT_TEMPLATE",
