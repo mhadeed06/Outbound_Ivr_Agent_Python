@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from src.config.insurance_config import set_active_insurance_by_name
 from src.models.data_models import CallState
-from src.utils.logging_config import set_call_id
+from src.utils.logging_config import set_call_id, set_visit_context
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ def make_webhooks_router(
                 return JSONResponse({"status": "ok"})
 
             call_state = active_calls[call_control_id]
+
+            # Restore visit_id/customer_id log context for this webhook's task.
+            set_visit_context(call_state.visit_id, call_state.customer_id)
 
             # Restore the insurance ContextVar for this webhook's task so any
             # downstream config_manager.get_*() calls (e.g. during cleanup) see

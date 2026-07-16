@@ -131,6 +131,39 @@ def append_conversation_step(call_state, transcript: str, gpt_result: str):
         "gpt_result": gpt_result
     })
 
+
+def _is_gpt_claim_mode_signal(response: str) -> bool:
+    """Detect the 'claim_mode' safety-net signal from GPT — used as a fallback
+    when is_claim_start() missed the IVR phrasing. Strict-equality on the
+    compact form so no normal say/value/confirm response can accidentally
+    match (no substring, no prefix)."""
+    if not response:
+        return False
+    compact = response.strip().lower().replace(" ", "").replace("_", "").rstrip(".,!?:;'\"")
+    return compact == "claimmode"
+
+
+async def _enter_claim_mode_and_forward(call_state, call_control_id: str, first_chunk: str):
+    """Flip claim_mode, bump debounce + STT segmentation for claims flow,
+    start the claims session, and forward the first chunk. Shared by the
+    real-time is_claim_start path and the post-GPT claim_mode fallback so
+    both behave identically."""
+    if call_state.claim_mode:
+        return
+    call_state.claim_mode = True
+    logger.info("Debounce time changed for claims flow")
+    call_state.debounce_seconds = config_manager.get_claim_debounce_seconds()
+    call_state.need_debounce_reset = True
+    claim_seg_timeout = config_manager.get_claim_segmentation_silence_ms()
+    call_state.segmentation_silence_ms = claim_seg_timeout
+    if hasattr(call_state, 'azure_stt_session') and call_state.azure_stt_session:
+        call_state.azure_stt_session.update_segmentation_timeout(claim_seg_timeout)
+        logger.info(f"✅ Segmentation timeout changed to {claim_seg_timeout}ms for claims")
+
+    await claims_agent.start_session(call_control_id)
+    await claims_agent.handle_final(call_control_id, first_chunk)
+
+
 # ─── 1. handle_user_speech: decorate transcript into a full prompt ────────────
 
 async def handle_user_speech(transcript: str, call_control_id: str):
@@ -166,21 +199,9 @@ async def handle_user_speech(transcript: str, call_control_id: str):
             return
 
 
-        # ENTER claim mode
+        # ENTER claim mode (real-time keyword match)
         if not call_state.claim_mode and is_claim_start(text):
-            call_state.claim_mode = True
-            # NEW: bump debounce while in claims flow
-            logger.info("Debounce time changed for claims flow")
-            call_state.debounce_seconds = config_manager.get_claim_debounce_seconds()
-            call_state.need_debounce_reset = True
-            claim_seg_timeout = config_manager.get_claim_segmentation_silence_ms()
-            call_state.segmentation_silence_ms = claim_seg_timeout
-            if hasattr(call_state, 'azure_stt_session') and call_state.azure_stt_session:
-                call_state.azure_stt_session.update_segmentation_timeout(claim_seg_timeout)
-                logger.info(f"✅ Segmentation timeout changed to {claim_seg_timeout}ms for claims")
-
-            await claims_agent.start_session(call_control_id)
-            await claims_agent.handle_final(call_control_id, text)  # send first debounced chunk
+            await _enter_claim_mode_and_forward(call_state, call_control_id, text)
             return
 
         # STAY/EXIT claim mode
@@ -221,6 +242,14 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     logger.info(f"GPT latency: {gpt_ms:.0f} ms")
     logger.info(f"GPT response: {response!r}")
 
+    # GPT-driven claim_mode fallback: if the real-time is_claim_start missed
+    # the IVR phrasing, GPT may recognize it semantically and return the
+    # exact word "claim_mode". Strict-equality match — cannot collide with
+    # say/value/confirm/dtmf/endcall/fallback formats.
+    if _is_gpt_claim_mode_signal(response) and not call_state.claim_mode:
+        logger.info("→ GPT signaled claim_mode (safety net — real-time detector missed)")
+        await _enter_claim_mode_and_forward(call_state, call_control_id, text)
+        return
 
     await process_llama_response(response, call_control_id)
 

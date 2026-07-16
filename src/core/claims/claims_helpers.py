@@ -1,16 +1,35 @@
 CLAIM_NOT_FOUND_TRIGGERS = [
-    "i couldn't find any claims",
-    "i did not find any claims",
-    "I didn't find any claims on that date",
-    "I did not find any claims on that date",
+    # Short, high-recall substrings — variations on "no claims found" that
+    # survive STT rewording. Keep them lowercased and use ONLY straight
+    # ASCII apostrophes; _normalize_for_match() folds Unicode variants below.
+    "couldn't find any claims",
+    "could not find any claims",
+    "didn't find any claims",
+    "did not find any claims",
+    "not find any claims",
     "no claims found",
-    "there are no claims on that date",
     "no matching claims",
-    "i’m not seeing any claims for that",
-    "I didn't find any claims on that date you can say check another date another member switch provider or for anything else say main menu",
+    "no claim was found",
+    "there are no claims on that date",
+    "no claims on that date",
+    "no claims for that date",
+    "no claims for this date of service",
+    "not seeing any claims",
+    "we don't have any claims on file",
+    "we do not have any claims on file",
 ]
+
+
+def _normalize_for_match(text: str) -> str:
+    """Fold curly apostrophes → straight and collapse whitespace so triggers
+    match across STT and prompt rewordings. Cheap: one lower() + one replace()
+    + a split/join."""
+    return " ".join(text.lower().replace("’", "'").split())
+
+
 def is_claim_not_found(text: str) -> bool:
-    return any(phrase in text.lower() for phrase in CLAIM_NOT_FOUND_TRIGGERS)
+    n = _normalize_for_match(text)
+    return any(phrase in n for phrase in CLAIM_NOT_FOUND_TRIGGERS)
 #### Claims helper functions 
 # --- Claim-capture triggers (keep tight & cheap) ---
 CLAIM_START_TRIGGERS = [

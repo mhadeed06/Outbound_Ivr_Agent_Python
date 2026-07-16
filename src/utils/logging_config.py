@@ -27,6 +27,11 @@ COLORS = {
 # AFTER the "v3:" prefix, which is stable and unique per call.
 # ────────────────────────────────────────────────────────────────────────────
 _call_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("call_id", default="-")
+# visit_id / customer_id are set at orchestrate/webhook/stream entry alongside
+# set_call_id. Included on every log line so ops can grep a specific visit or
+# customer's calls end-to-end.
+_visit_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("visit_id", default="-")
+_customer_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("customer_id", default="-")
 
 SHORT_TAG_WIDTH = 8
 
@@ -47,6 +52,13 @@ def set_call_id(call_control_id: str) -> None:
     _call_id_var.set(_shorten(call_control_id))
 
 
+def set_visit_context(visit_id, customer_id) -> None:
+    """Attach visit_id and customer_id to the current task's log context.
+    Grep in App Insights with 'v=<visit_id>' or 'cid=<customer_id>'."""
+    _visit_id_var.set(str(visit_id) if visit_id is not None else "-")
+    _customer_id_var.set(str(customer_id) if customer_id is not None else "-")
+
+
 def get_call_id() -> str:
     return _call_id_var.get()
 
@@ -59,9 +71,13 @@ def shorten_call_id(call_control_id: str) -> str:
 
 
 class CallIdFilter(logging.Filter):
-    """Injects the current call's short tag onto every log record."""
+    """Injects the current call's short tag + visit/customer IDs onto every
+    log record. All three are ContextVars → cost is a dict lookup per record,
+    no I/O and no allocation of consequence."""
     def filter(self, record: logging.LogRecord) -> bool:
         record.call_id = _call_id_var.get()
+        record.visit_id = _visit_id_var.get()
+        record.customer_id = _customer_id_var.get()
         return True
 
 
@@ -82,7 +98,7 @@ class BelowErrorFilter(logging.Filter):
         return record.levelno < logging.ERROR
 
 
-LOG_FORMAT = "[%(asctime)s - %(levelname)s - %(call_id)-8s - %(filename)s - %(funcName)s] %(message)s"
+LOG_FORMAT = "[%(asctime)s - %(levelname)s - c=%(call_id)-8s v=%(visit_id)s cid=%(customer_id)s - %(filename)s - %(funcName)s] %(message)s"
 
 logging_config = {
     "version": 1,

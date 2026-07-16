@@ -217,10 +217,9 @@ async def _run_upload_call_artifacts(snapshot: dict) -> None:
         description = "No claims found for this patient." + storage_note
 
     else:
-        # Any other failure (ended-before-claims-flow, IVR verification
-        # failure, agent-routed, etc.) → run the failure classifier so the
-        # frontend still gets an actionable status update.
-        request_status = REQUEST_STATUS_FAILED
+        # Any other outcome (ended-before-claims-flow, IVR verification failure,
+        # agent-routed, or a no-claim that the real-time detector missed) →
+        # run the classifier and trust its verdict.
         plain_transcript = build_plain_transcript(
             snapshot.get("full_transcript") or []
         )
@@ -229,13 +228,20 @@ async def _run_upload_call_artifacts(snapshot: dict) -> None:
             cleanup_reason=cleanup_reason,
             call_tag=call_tag,
         )
-        claim_status = failure["status"]           # "patient not found" | "call failed"
+        claim_status = failure["status"]           # "no claim" | "patient not found" | "call failed"
         description = failure["description"]
+        # "no claim" = payer verified patient and told us no claim exists for
+        # the DOS. That's a SUCCESSFUL call — the classifier caught what the
+        # real-time detector missed. Everything else is a failure.
+        request_status = (
+            REQUEST_STATUS_SUCCESS if claim_status == "no claim"
+            else REQUEST_STATUS_FAILED
+        )
         if errors:
             description = f"{description} Storage issues: {'; '.join(errors)}."
         logger.info(
-            f"⚠️ Failure classified (reason: {cleanup_reason!r}) → "
-            f"claim_status={claim_status!r}"
+            f"⚠️ Classified (reason: {cleanup_reason!r}) → "
+            f"claim_status={claim_status!r} request_status={request_status!r}"
         )
 
     # 4) Update Billing-Agent/Log ────────────────────────────────────────────

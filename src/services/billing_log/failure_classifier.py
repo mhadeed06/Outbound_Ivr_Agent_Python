@@ -20,7 +20,39 @@ from src.services.llm.llm_service import _call_gpt_api
 logger = logging.getLogger(__name__)
 
 
-_ALLOWED = {"patient not found", "call failed"}
+_ALLOWED = {"no claim", "patient not found", "call failed"}
+
+
+def _normalize_for_match(text: str) -> str:
+    """Fold curly apostrophes → straight and collapse whitespace so patterns
+    match across STT/prompt phrasing variants."""
+    return " ".join((text or "").lower().replace("’", "'").split())
+
+
+# ── Rule-based patterns ────────────────────────────────────────────────────
+# Substrings that indicate the payer's IVR verified the patient but reported
+# NO CLAIMS exist for the DOS/patient. Matched against the normalized
+# transcript. Signals a SUCCESSFUL call (payer confirmed no-claim outcome)
+# — used as a safety net if the real-time detector in main.py missed the
+# phrasing. Priority 0 in the classifier.
+_NO_CLAIM_FOUND_PATTERNS = (
+    "couldn't find any claims",
+    "could not find any claims",
+    "didn't find any claims",
+    "did not find any claims",
+    "no claims found",
+    "no matching claims",
+    "no claim was found",
+    "no claims on that date",
+    "no claims for that date",
+    "no claims for this date of service",
+    "there are no claims on that date",
+    "not seeing any claims",
+    "we don't have any claims on file",
+    "we do not have any claims on file",
+    "no claims associated with this",
+    "no claims associated with that",
+)
 
 # ── Rule-based patterns ────────────────────────────────────────────────────
 # Substrings that indicate the IVR could not verify the patient. Matched
@@ -133,7 +165,27 @@ def _identifier_hint_from_pattern(pattern: str) -> str:
 def _rule_based_classify(transcript: str, cleanup_reason: str, call_tag: str) -> dict | None:
     """Try to classify without hitting GPT. Returns None if no rule matches."""
     reason = (cleanup_reason or "").lower()
-    text = (transcript or "").lower()
+    text = _normalize_for_match(transcript or "")
+
+    # Priority 0: payer's IVR verified the patient but confirmed no claims exist
+    # for the DOS/patient. SAFETY NET — real-time detector in main.py catches
+    # this before we get here in the normal path (routes to CLAIMS_NOT_FOUND
+    # cleanup reason), so if we're seeing it here the phrasing slipped past
+    # the real-time patterns. Classify as SUCCESS.
+    for pattern in _NO_CLAIM_FOUND_PATTERNS:
+        if pattern in text:
+            logger.info(
+                f"🔍 Rule-based: 'no claim' (matched {pattern!r}) — post-call safety net"
+            )
+            return {
+                "status": "no claim",
+                "description": (
+                    f"The payer's IVR confirmed no claims exist for this patient/DOS. "
+                    f"Detected post-call by the failure classifier (the real-time "
+                    f"detector missed this phrasing). Trigger phrase in transcript: "
+                    f"{pattern!r}. call_id={call_tag}"
+                ),
+            }
 
     # Priority 1: explicit patient-verification failure keywords in transcript.
     for pattern in _PATIENT_NOT_FOUND_PATTERNS:
@@ -180,15 +232,21 @@ def _rule_based_classify(transcript: str, cleanup_reason: str, call_tag: str) ->
 
 
 # ── GPT fallback ──────────────────────────────────────────────────────────
-_GPT_PROMPT = """You are analyzing a failed insurance IVR call that did NOT reach a claim outcome.
+_GPT_PROMPT = """You are analyzing an insurance IVR call that did NOT reach a claim outcome via our normal flow.
 
-Determine WHY the call failed. Return JSON with exactly two keys:
-  "status"      — one of: "patient not found" | "call failed"
+Determine what actually happened. Return JSON with exactly two keys:
+  "status"      — one of: "no claim" | "patient not found" | "call failed"
   "description" — 2-4 short sentences describing what happened, actionable for a
                   medical billing team member. Include specific quotes from the
-                  transcript when they help explain the failure.
+                  transcript when they help explain the outcome.
 
 Status meaning — pick EXACTLY ONE:
+- "no claim": the payer's IVR VERIFIED the patient/provider but told us there
+  are no claims for the DOS/patient we asked about. Signals: "I couldn't find
+  any claims for that date", "no claims on file for this DOS", "we don't have
+  any claims associated with that patient", etc. Patient/provider WAS verified —
+  only the specific claim wasn't found. This is a SUCCESSFUL outcome (payer
+  confirmed there is no claim).
 - "patient not found": the payer's IVR could not verify the patient/provider.
   Signals: the IVR said ANY of these were not recognized, invalid, or not on
   file — tax ID, NPI, member ID, patient name, date of birth, or provider
@@ -198,6 +256,12 @@ Status meaning — pick EXACTLY ONE:
 - "call failed": everything else. The call ended before a claim outcome for
   any other reason — routed to a live agent, IVR error, technical failure,
   ended prematurely, or the outcome is unclear.
+
+Priority when signals overlap:
+- If the transcript shows "no claims found for the DOS/patient" AFTER the
+  patient was verified → "no claim" (successful).
+- If the IVR rejected an identifier BEFORE reaching the DOS lookup →
+  "patient not found".
 
 Rules:
 - Base your decision on what the transcript ACTUALLY says. Don't invent details.

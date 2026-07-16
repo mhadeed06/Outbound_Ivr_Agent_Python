@@ -14,6 +14,7 @@ Allowed Response Formats:
 - confirm:<yes/no> → confirm a heard value
 - endcall → terminate the call
 - fallback → if the IVR message is unclear or unsupported, IF YOU THINK NO ASNWER IS NEEDED, just reply with "fallback" and we will continue listening for the next IVR prompt.
+- claim_mode → the IVR just started reading claim details (e.g. "I found your claim", "I found 2 claims", "here's the first claim", "the claim was processed on..."). Return ONLY the exact word claim_mode — no prefix, no colon, no other text.
 - ONLY RESPOSNE WITH A VALUE OR SAY IF HE IS ASKING FOR ANY INFORMATION OR CONFINMATION, OTHERWISE JUST REPLY WITH FALLBACK
 ***********
 **Rules**: Only use one of the above formats—no extra text.
