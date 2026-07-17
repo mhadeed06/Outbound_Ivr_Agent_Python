@@ -5,8 +5,9 @@ __pycache__/
 venv/
 # Environment variables
 .env
-# Test file
+# Test files
 test.py
+test_cigna_prompt.py
 
 .env.qa
 .env.prod
