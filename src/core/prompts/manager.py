@@ -22,6 +22,33 @@ def get_main_prompt_template() -> str:
         raise ValueError(f"Unknown main prompt: {prompt_name}")
     return load_prompt(file_stem)
 
+
+# ── denial follow-up templates ──────────────────────────────────────────────
+# Keyed by (insurance name, phase). Phase is "ivr" (reach a representative
+# after the pivot) or "representative" (live rep conversation). A payer must
+# have BOTH entries before its supports_denial_inquiry flag is turned on.
+_DENIAL_PROMPT_FILES = {
+    ("HUMANA", "ivr"): "humana/humana_denial_ivr_template",
+    ("HUMANA", "representative"): "humana/humana_denial_rep_template",
+}
+
+
+def get_denial_prompt_template(phase: str) -> str:
+    """Return the raw denial-flow prompt text for the active insurance.
+
+    phase: "ivr" | "representative"
+    Raises ValueError if the active payer has no template for that phase —
+    fail loudly, same philosophy as the config_manager getters.
+    """
+    insurance = config_manager.get_insurance_name()
+    try:
+        file_stem = _DENIAL_PROMPT_FILES[(insurance, phase)]
+    except KeyError:
+        raise ValueError(
+            f"No denial prompt registered for insurance={insurance!r} phase={phase!r}"
+        )
+    return load_prompt(file_stem)
+
 # Back-compat
 def get_prompt_template() -> str:
     return get_main_prompt_template()

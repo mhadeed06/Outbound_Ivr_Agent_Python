@@ -14,7 +14,10 @@ from functools import partial
 #from prompt import PROMPT_TEMPLATE
 import src.core.claims.claims_agent as claims_agent
 from src.config.insurance_config import config_manager
-from src.core.prompts.manager import get_main_prompt_template
+from src.core.prompts.manager import get_main_prompt_template, get_denial_prompt_template
+from src.core.denials.transition import is_transfer_signal
+from src.core.denials.detection import confirm_denial_via_gpt
+from src.core.denials.context import build_denial_format_kwargs, render_denial_context
 from src.models.data_models import CallState, SimpleCallRequest
 import src.services.telnyx.client as telnyx_client
 from src.api.v1.orchestrate import make_orchestrate_router
@@ -164,6 +167,182 @@ async def _enter_claim_mode_and_forward(call_state, call_control_id: str, first_
     await claims_agent.handle_final(call_control_id, first_chunk)
 
 
+# ─── Denial follow-up (in-call pivot) ─────────────────────────────────────────
+
+# How many recent turns of the denial conversation to inject into the rep
+# prompt. A real denial call has ~15-25 exchanges; 12 turns covers the active
+# context without blowing up the token budget.
+_DENIAL_HISTORY_MAX_TURNS = 12
+
+
+def _is_gpt_rep_mode_signal(response: str) -> bool:
+    """Detect the 'rep_mode' safety-net signal from the denial-IVR prompt —
+    a live human picked up without any transfer phrase being heard. Strict
+    equality on the compact form (mirror of _is_gpt_claim_mode_signal)."""
+    if not response:
+        return False
+    compact = response.strip().lower().replace(" ", "").replace("_", "").rstrip(".,!?:;'\"")
+    return compact == "repmode"
+
+
+def _enter_denial_rep_phase(call_state):
+    """Flip to the live-representative phase: looser speech timings (humans
+    pause more than IVR menus) + rep prompt from the next turn on."""
+    call_state.phase = "denial_rep"
+    rep_debounce = config_manager.get_denial_rep_debounce_seconds()
+    call_state.debounce_seconds = rep_debounce
+    call_state.need_debounce_reset = True
+    rep_seg = config_manager.get_denial_rep_segmentation_silence_ms()
+    call_state.segmentation_silence_ms = rep_seg
+    if getattr(call_state, "azure_stt_session", None):
+        call_state.azure_stt_session.update_segmentation_timeout(rep_seg)
+    logger.info(
+        f"🧑‍💼 Denial REP phase entered (debounce={rep_debounce}s, segmentation={rep_seg}ms)"
+    )
+
+
+def _format_denial_history(call_state) -> str:
+    """Render the denial-phase conversation history for the rep prompt.
+
+    Only entries appended AFTER the pivot (denial_history_start) are shown —
+    the earlier claim-status/claims-controller turns (DTMF menus, one-word
+    intents) would be noise to the rep conversation. Bot lines for fallback/
+    endcall are skipped (no audio was produced for them)."""
+    start = getattr(call_state, "denial_history_start", 0)
+    entries = (call_state.conversation_history or [])[start:][-_DENIAL_HISTORY_MAX_TURNS:]
+    lines = []
+    for e in entries:
+        heard = (e.get("transcript") or "").strip()
+        replied = (e.get("gpt_result") or "").strip()
+        if heard:
+            lines.append(f"Rep: {heard}")
+        if replied:
+            low = replied.lower()
+            compact = low.replace(" ", "")
+            if low.startswith("fallback") or compact in ("endcall", "end", "hangup", "repmode"):
+                continue
+            if low.startswith("say:"):
+                replied = replied[4:].strip()
+            lines.append(f"You: {replied}")
+    if not lines:
+        return "(no prior conversation yet — this is the first turn)"
+    return "\n".join(lines)
+
+
+async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
+    """Denial pivot decision + execution. Called from the claims controller's
+    STOP path (inside the claims lock) right before the normal end-of-claims
+    hangup. Returns True ONLY when the call is pivoting into the denial
+    follow-up flow — the caller then ends the claims session WITHOUT hangup.
+
+    Gate (all must hold): request opted in AND payer supports the flow AND a
+    denial cue was heard live AND one GPT check confirms the final claim is
+    denied. Any failure anywhere → False → the call hangs up exactly as today.
+    """
+    call_state = active_calls.get(call_id)
+    if not call_state:
+        return False
+    if call_state.phase != "claim_status" or getattr(call_state, "denial_pivoted", False):
+        return False
+    if not getattr(call_state, "denial_follow_up", False):
+        return False
+    try:
+        if not config_manager.get_supports_denial_inquiry():
+            return False
+    except RuntimeError:
+        return False
+    if not getattr(call_state, "denial_candidate", False):
+        return False
+
+    if not await confirm_denial_via_gpt(claims_text):
+        logger.info("🩺 Denial pivot skipped — GPT did not confirm a denied final claim")
+        return False
+
+    # ── PIVOT ────────────────────────────────────────────────────────────
+    call_state.denial_pivoted = True
+    call_state.claim_mode = False
+    call_state.phase = "denial_ivr"
+    call_state.denial_history_start = len(call_state.conversation_history)
+
+    # Revert speech timings from claim-mode values back to the IVR baseline.
+    call_state.debounce_seconds = config_manager.get_debounce_seconds()
+    call_state.need_debounce_reset = True
+    normal_seg = config_manager.get_segmentation_silence_ms()
+    call_state.segmentation_silence_ms = normal_seg
+    if getattr(call_state, "azure_stt_session", None):
+        call_state.azure_stt_session.update_segmentation_timeout(normal_seg)
+
+    # Re-arm the auto-hangup watchdog with the denial budget — rep hold
+    # queues outlive the original claim-status timer.
+    try:
+        old_task = getattr(call_state, "auto_hangup_task", None)
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
+        denial_secs = config_manager.get_denial_auto_hangup_seconds()
+        call_state.auto_hangup_task = asyncio.create_task(
+            auto_hangup(call_id, active_calls, ensure_call_cleanup, denial_secs)
+        )
+        logger.info(f"⏲️ Auto-hangup re-armed for denial flow: {denial_secs}s")
+    except Exception as e:
+        logger.warning(f"Auto-hangup re-arm failed (original timer still active): {e}")
+
+    logger.info(
+        "🔀 DENIAL PIVOT: final claim is DENIED — asking the IVR for a "
+        "representative instead of hanging up"
+    )
+
+    # Proactively ask for a representative — the claims menu is awaiting a
+    # command right now. If TTS fails, the denial-IVR prompt drives the next
+    # turn anyway.
+    try:
+        await speak_with_azure("Representative", call_id)
+    except Exception as e:
+        logger.warning(f"Pivot TTS failed (denial-IVR prompt will drive next turn): {e}")
+
+    return True
+
+
+async def _handle_denial_speech(text: str, call_state, call_control_id: str):
+    """Handle one debounced utterance while the call is in a denial phase
+    (denial_ivr → reaching a representative, denial_rep → live conversation)."""
+
+    # IVR announced the transfer → flip to rep phase before template selection.
+    if call_state.phase == "denial_ivr" and is_transfer_signal(text):
+        _enter_denial_rep_phase(call_state)
+
+    fmt = build_denial_format_kwargs(call_state)
+
+    def _build_prompt() -> str:
+        if call_state.phase == "denial_rep":
+            template = get_denial_prompt_template("representative")
+            return template.format(
+                transcript=text,
+                conversation_history=_format_denial_history(call_state),
+                denial_context_block=render_denial_context(call_state),
+                **fmt,
+            )
+        template = get_denial_prompt_template("ivr")
+        return template.format(transcript=text, **fmt)
+
+    t0 = time.perf_counter()
+    response = await _call_gpt_api(_build_prompt())
+    gpt_ms = (time.perf_counter() - t0) * 1000
+    logger.info(f"GPT latency (denial/{call_state.phase}): {gpt_ms:.0f} ms")
+    logger.info(f"GPT response (denial/{call_state.phase}): {response!r}")
+
+    # rep_mode safety net: a live human picked up but no transfer phrase was
+    # heard. Flip phase and re-run THIS chunk under the rep template so the
+    # human's greeting gets a proper conversational response.
+    if call_state.phase == "denial_ivr" and _is_gpt_rep_mode_signal(response):
+        logger.info("→ GPT signaled rep_mode (human picked up — no transfer phrase heard)")
+        _enter_denial_rep_phase(call_state)
+        response = await _call_gpt_api(_build_prompt())
+        logger.info(f"GPT response (denial/rep re-run): {response!r}")
+
+    append_conversation_step(call_state, text, response)
+    await process_llama_response(response, call_control_id)
+
+
 # ─── 1. handle_user_speech: decorate transcript into a full prompt ────────────
 
 async def handle_user_speech(transcript: str, call_control_id: str):
@@ -190,6 +369,14 @@ async def handle_user_speech(transcript: str, call_control_id: str):
         return
 
     append_ivr(call_state, text)
+
+    # ── denial follow-up routing (post-pivot phases only) ───────────────────
+    # Once the call pivoted into the denial flow, every utterance goes to the
+    # denial handler — the claim-status ladder below is bypassed entirely.
+    # Calls that never pivot (phase == "claim_status") are unaffected.
+    if getattr(call_state, "phase", "claim_status") in ("denial_ivr", "denial_rep"):
+        await _handle_denial_speech(text, call_state, call_control_id)
+        return
 
     # ── claim routing (the only logic in main) ──────────────────────────────
     if call_state:
@@ -279,6 +466,9 @@ process_llama_response = partial(
 
 claims_agent.register_hangup(bound_hangup)  # ← same 1-arg signature
 claims_agent.register_active_calls(active_calls)
+# Denial pivot: the claims controller's STOP path consults this before the
+# normal end-of-claims hangup (see _pivot_to_denial_flow above).
+claims_agent.register_denial_pivot(_pivot_to_denial_flow)
 
 
 # Mount the orchestrate router (uses the SAME shared state/funcs from main.py)

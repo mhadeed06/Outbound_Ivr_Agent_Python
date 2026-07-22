@@ -77,6 +77,37 @@ class CallState:
     # KeyError on the first template placeholder).
     debounce_task: Optional[object] = None
 
+    # Reference to the auto-hangup watchdog task started in orchestrate.py.
+    # Stored so the denial pivot can cancel the claim-status timer and re-arm
+    # a longer one (rep hold queues outlive the original budget).
+    auto_hangup_task: Optional[object] = None
+
+    # ── denial follow-up (in-call pivot) ────────────────────────────────────
+    # Request opt-in: frontend sent denial_follow_up=true on /v1/Billing-Agent/Call.
+    denial_follow_up: bool = False
+    # Which conversational phase this call is in:
+    #   "claim_status" → the normal flow (default; behavior identical to today)
+    #   "denial_ivr"   → post-pivot, navigating the IVR to reach a representative
+    #   "denial_rep"   → talking to a live human representative
+    phase: str = "claim_status"
+    # Live rule-based flag: a claim-readout chunk mentioned a denial.
+    # Cheap signal only — the pivot decision is confirmed by one GPT check.
+    denial_candidate: bool = False
+    # Set once the pivot actually happened (used by post-call/logging).
+    denial_pivoted: bool = False
+    # Denial-reason engine state (populated in later phases of the feature):
+    # registry key of the classified reason, verbatim reason text, and the
+    # per-question checklist {index: "OPEN"|"ASKED"|"ANSWERED"}.
+    denial_reason_key: Optional[str] = None
+    denial_reason_verbatim: Optional[str] = None
+    denial_checklist: Optional[dict] = None
+    # Background GPT reason-classification task — cancelled in cleanup step 0.
+    denial_reason_task: Optional[object] = None
+    # Index into conversation_history where the denial flow began — the rep
+    # prompt's history block only shows entries from this point on (earlier
+    # claim-status menu turns would be noise to the rep conversation).
+    denial_history_start: int = 0
+
     def __post_init__(self):
         if self.debounce_seconds is None:
             self.debounce_seconds = config_manager.get_debounce_seconds()

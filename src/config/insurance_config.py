@@ -24,6 +24,22 @@ class InsuranceConfig:
     # races that caused duplicate "Details"/"Next claim" responses on CIGNA).
     dedupe_chunks: bool = False
 
+    # ── denial follow-up (in-call pivot) ────────────────────────────────────
+    # When True AND the request opted in (denial_follow_up=true), a claim
+    # that is detected as DENIED during the claim readout pivots the SAME
+    # call into the denial flow (ask for a representative, gather denial
+    # details) instead of hanging up. Enable per payer only AFTER the
+    # "Representative" pivot has been tested against that payer's IVR.
+    supports_denial_inquiry: bool = False
+    # Timings for the live-representative phase. Humans talk slower and
+    # pause more than IVR menus, so both are looser than the IVR baseline.
+    denial_rep_debounce_seconds: float = 1.5
+    denial_rep_segmentation_silence_ms: int = 1500
+    # Replacement auto-hangup budget (seconds) armed at the pivot moment —
+    # rep hold queues run long, so the original claim-status timer would
+    # cut the call mid-hold. None → fall back to auto_hangup_seconds.
+    denial_auto_hangup_seconds: Optional[int] = None
+
 # All insurance configurations
 INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
     "CIGNA": InsuranceConfig(
@@ -51,6 +67,12 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         segmentation_silence_ms=500,
         claim_segmentation_silence_ms=1300,
         auto_hangup_seconds=1600,
+        # First payer wired for the in-call denial pivot (values validated
+        # on the old denial-inquiry demo calls).
+        supports_denial_inquiry=True,
+        denial_rep_debounce_seconds=0.8,
+        denial_rep_segmentation_silence_ms=800,
+        denial_auto_hangup_seconds=1800,
     ),
 
     "BAYLOR_SCOTT": InsuranceConfig(
@@ -223,6 +245,20 @@ class ConfigManager:
 
     def get_dedupe_chunks(self) -> bool:
         return self.get_config().dedupe_chunks
+
+    # ── denial follow-up getters ─────────────────────────────────────────────
+    def get_supports_denial_inquiry(self) -> bool:
+        return self.get_config().supports_denial_inquiry
+
+    def get_denial_rep_debounce_seconds(self) -> float:
+        return self.get_config().denial_rep_debounce_seconds
+
+    def get_denial_rep_segmentation_silence_ms(self) -> int:
+        return self.get_config().denial_rep_segmentation_silence_ms
+
+    def get_denial_auto_hangup_seconds(self) -> int:
+        cfg = self.get_config()
+        return cfg.denial_auto_hangup_seconds or cfg.auto_hangup_seconds
 
 
 # Global instance — stateless, reads from ContextVar on every call.

@@ -80,6 +80,12 @@ def make_orchestrate_router(
 
             visit_id    = incoming.get("visit_id")
             customer_id = incoming.get("customer_id")
+            # Opt-in for the in-call denial pivot: when true AND the payer
+            # supports it AND the claim turns out DENIED, the same call
+            # continues to a live representative to gather denial details
+            # instead of hanging up. Default false — feature-off behavior
+            # is identical to today.
+            denial_follow_up = bool(incoming.get("denial_follow_up", False))
 
             # Frontend sends only visit_id + customer_id. The insurance is
             # derived later from the plan name returned by the Clinical API.
@@ -222,10 +228,14 @@ def make_orchestrate_router(
                 insurance_name=insurance.name,
                 visit_data=visit_data,
                 ref_no=ref_no,
+                denial_follow_up=denial_follow_up,
             )
 
             auto_hangup_seconds = config_manager.get_auto_hangup_seconds()
-            asyncio.create_task(auto_hangup_fn(call_control_id, delay_seconds=auto_hangup_seconds))  # type: ignore[arg-type]
+            # Keep a handle to the watchdog so the denial pivot can cancel the
+            # claim-status timer and re-arm a longer one at pivot time.
+            watchdog = asyncio.create_task(auto_hangup_fn(call_control_id, delay_seconds=auto_hangup_seconds))  # type: ignore[arg-type]
+            active_calls[call_control_id].auto_hangup_task = watchdog
 
             # ── race-proof wait for 'call.initiated' ────────────────────────
             status = "queued"

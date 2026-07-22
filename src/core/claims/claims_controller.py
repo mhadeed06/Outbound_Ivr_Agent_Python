@@ -6,6 +6,7 @@ from src.config.insurance_config import config_manager
 from src.core.prompts.claims_prompts import get_claims_prompt
 from src.services.llm.llm_service import _call_gpt_api
 from src.core.claims.claims_intent_mapper import map_keyword
+from src.core.denials.detection import mentions_denial
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,15 @@ async def handle_final(call_id: str, utterance: str):
         s["current"].append(utterance)
         s["full_transcript"].append(utterance)
 
+        # Live denial cue (free rule scan). Sets the cheap candidate flag on
+        # CallState — the actual pivot decision happens on the STOP path and
+        # is confirmed by one GPT check there.
+        if mentions_denial(utterance):
+            _cs = claims_agent._active_calls.get(call_id) if claims_agent._active_calls else None
+            if _cs is not None and not getattr(_cs, "denial_candidate", False):
+                _cs.denial_candidate = True
+                logger.info(f"[{call_id}] 🩺 Denial cue heard in claim readout — candidate flagged")
+
         insurance_name = config_manager.get_insurance_name()
 
         # Full transcript for conversation history (what was actually said)
@@ -124,7 +134,22 @@ async def handle_final(call_id: str, utterance: str):
             return
 
         if intent == "STOP":
-            await claims_agent.end_session(call_id, already_locked=True)
+            # Denial pivot gate: before the normal end-of-claims hangup, give
+            # main.py's pivot callback a chance to keep the call alive and
+            # steer it into the denial follow-up flow. The callback does the
+            # full gate check (request opt-in + payer config + candidate flag
+            # + one GPT confirm) and returns True only when pivoting. Any
+            # error → False → the call hangs up exactly as today.
+            pivoted = False
+            if claims_agent._denial_pivot_cb:
+                try:
+                    claims_text = " ".join(s.get("full_transcript", [])).strip()
+                    pivoted = await claims_agent._denial_pivot_cb(call_id, claims_text)
+                except Exception as e:
+                    logger.error(f"[{call_id}] denial pivot callback failed (falling back to hangup): {e}")
+                    pivoted = False
+
+            await claims_agent.end_session(call_id, already_locked=True, skip_hangup=pivoted)
             return
 
         if intent == "NEXT":

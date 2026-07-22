@@ -164,12 +164,13 @@ async def _process_llama_response(
         logger.info("Llama returned fallback; ignoring")
         return
 
-    # claim_mode is handled in main.py BEFORE this function is called (safety-net
-    # for is_claim_start). Guard here as defense in depth so it never falls
-    # through as "unrecognized" if the flow ever reroutes.
+    # claim_mode / rep_mode are handled in main.py BEFORE this function is
+    # called (safety-nets for is_claim_start / the denial-IVR rep detection).
+    # Guard here as defense in depth so they never fall through as
+    # "unrecognized" — and can never be spoken — if the flow ever reroutes.
     compact_signal = low.replace(" ", "").replace("_", "").rstrip(".,!?:;'\"")
-    if compact_signal == "claimmode":
-        logger.info("Llama returned claim_mode; already handled upstream, ignoring")
+    if compact_signal in ("claimmode", "repmode"):
+        logger.info(f"Llama returned mode signal {s!r}; already handled upstream, ignoring")
         return
 
     # 1) DTMF (explicit only)

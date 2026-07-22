@@ -49,4 +49,3 @@ TRANSCRIPT: "{transcript_chunk}"
 
 Reply with ONE WORD: DETAILS, NEXT, STOP, or CONTINUE
 Answer:
-" 

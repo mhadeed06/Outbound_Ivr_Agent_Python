@@ -13,9 +13,10 @@ _sessions: Dict[str, Dict] = {}       # call_id -> {"active": bool, "current": L
 _locks: Dict[str, asyncio.Lock] = {}  # call_id -> asyncio.Lock
 
 # ── injected callbacks from main ────────────────────────────────────────────
-_hangup_cb = None     # async def (call_id: str) -> None
-_tts_cb = None        # async def (text: str, call_id: str) -> None
-_dtmf_cb = None       # async def (dtmf: str, call_id: str) -> None
+_hangup_cb = None        # async def (call_id: str) -> None
+_tts_cb = None           # async def (text: str, call_id: str) -> None
+_dtmf_cb = None          # async def (dtmf: str, call_id: str) -> None
+_denial_pivot_cb = None  # async def (call_id: str, claims_text: str) -> bool
 _active_calls = None
 
 
@@ -28,6 +29,18 @@ def register_hangup(cb):
     """Main should call this once: claims_agent.register_hangup(hangup_call)"""
     global _hangup_cb
     _hangup_cb = cb
+
+
+def register_denial_pivot(cb):
+    """Main registers the denial-pivot decision callback once.
+
+    Called from the claims controller's STOP path (inside the per-call lock)
+    with (call_id, full_claims_text). Returns True if the call is pivoting
+    into the denial follow-up flow — in that case end_session must be called
+    with skip_hangup=True so the call stays alive.
+    """
+    global _denial_pivot_cb
+    _denial_pivot_cb = cb
 
 
 def register_tts(cb):
@@ -60,7 +73,13 @@ async def start_session(call_id: str):
     _locks[call_id] = _locks.get(call_id) or asyncio.Lock()
 
 
-async def end_session(call_id: str, *, already_locked: bool = False):
+async def end_session(call_id: str, *, already_locked: bool = False, skip_hangup: bool = False):
+    """End the claims session and persist captured claims onto CallState.
+
+    skip_hangup=True is used by the denial pivot: the claims data is
+    finalized exactly as normal, but the call stays alive so the same call
+    can continue into the denial follow-up flow.
+    """
     s = _sessions.get(call_id)
     if not s or not s.get("active"):
         return
@@ -89,7 +108,9 @@ async def end_session(call_id: str, *, already_locked: bool = False):
 
         s["active"] = False
 
-        if _hangup_cb:
+        if skip_hangup:
+            logger.info(f"[{call_id}] claims session ended WITHOUT hangup (denial pivot)")
+        elif _hangup_cb:
             try:
                 await _hangup_cb(call_id)
             except Exception:

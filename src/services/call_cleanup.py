@@ -55,13 +55,22 @@ async def ensure_call_cleanup(
         # can't fire handle_user_speech AFTER we pop this call from
         # active_calls (was causing KeyError: 'tax_id' from empty visit_data
         # — see Task exception was never retrieved logs in App Insights).
-        try:
-            debounce_task = getattr(cs, "debounce_task", None)
-            if debounce_task is not None and not debounce_task.done():
-                debounce_task.cancel()
-                logger.info(f"[{call_control_id}] cancelled pending debounce task")
-        except Exception as e:
-            logger.warning(f"[{call_control_id}] debounce cancel error (ignored): {e}")
+        # Same for the denial-flow background tasks: the reason-classifier
+        # task and the auto-hangup watchdog. Never cancel the task we are
+        # currently running inside (auto_hangup itself calls this cleanup —
+        # cancelling it here would kill the cleanup mid-flight).
+        for task_attr in ("debounce_task", "denial_reason_task", "auto_hangup_task"):
+            try:
+                task = getattr(cs, task_attr, None)
+                if (
+                    task is not None
+                    and not task.done()
+                    and task is not asyncio.current_task()
+                ):
+                    task.cancel()
+                    logger.info(f"[{call_control_id}] cancelled pending {task_attr}")
+            except Exception as e:
+                logger.warning(f"[{call_control_id}] {task_attr} cancel error (ignored): {e}")
 
         # 1️⃣ stop claims flow
         try:
