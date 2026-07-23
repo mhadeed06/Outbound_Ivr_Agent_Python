@@ -57,12 +57,22 @@ def build_denial_format_kwargs(call_state) -> dict:
         or visit_data.get("provider_first_last")
         or os.getenv("DENIAL_TEST_RENDERING_PROVIDER", provider_name)
     )
+    # NPIs: a claim has an individual RENDERING provider NPI and the practice
+    # has a GROUP/billing NPI. Reps may ask for either — carry both. {npi} (the
+    # identification NPI used in the claim-status flow) is the rendering one by
+    # convention here, so default rendering_provider_npi to it.
+    rendering_provider_npi = visit_data.get("rendering_provider_npi") or visit_data.get("npi") or ""
+    group_npi = visit_data.get("group_npi") or ""
+    group_tax_id = visit_data.get("group_tax_id") or visit_data.get("tax_id") or ""
     return {
         **visit_data,
         "billed_amount": visit_data.get("billed_amount")
         or os.getenv("DENIAL_TEST_BILLED_AMOUNT", "not available"),
         "provider_name": provider_name,
         "rendering_provider_name": rendering_provider_name,
+        "rendering_provider_npi": rendering_provider_npi or "not available",
+        "group_npi": group_npi or "not available",
+        "group_tax_id": group_tax_id or "not available",
         "agent_persona_name": os.getenv("DENIAL_AGENT_PERSONA_NAME", "Kevin"),
         "callback_number": os.getenv("DENIAL_CALLBACK_NUMBER", "469-581-2969"),
     }
