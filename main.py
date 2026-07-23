@@ -323,8 +323,22 @@ async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
     if not getattr(call_state, "denial_candidate", False):
         return False
 
-    if not await confirm_denial_via_gpt(claims_text):
-        logger.info("🩺 Denial pivot skipped — GPT did not confirm a denied final claim")
+    # Deterministic-first: a STRONG denial phrase in the readout ("was denied",
+    # "line item was denied", "denied because") is certain — pivot without GPT
+    # so a GPT hallucination can never veto a real denial. Only fall back to
+    # the GPT confirm for WEAK/ambiguous signals ("denial" in passing,
+    # conditional phrasings, "not covered").
+    from src.core.denials.detection import denial_signal
+    signal = denial_signal(claims_text)
+    if signal == "strong":
+        logger.info("🩺 Denial pivot: STRONG denial signal in readout — pivoting (no GPT needed)")
+    elif signal == "weak":
+        if not await confirm_denial_via_gpt(claims_text):
+            logger.info("🩺 Denial pivot skipped — weak signal, GPT did not confirm denial")
+            return False
+        logger.info("🩺 Denial pivot: weak signal confirmed by GPT")
+    else:
+        logger.info("🩺 Denial pivot skipped — no denial signal in final readout")
         return False
 
     # ── PIVOT ────────────────────────────────────────────────────────────

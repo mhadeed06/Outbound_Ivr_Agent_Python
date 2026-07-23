@@ -18,25 +18,70 @@ from src.services.llm.llm_service import _call_gpt_api
 logger = logging.getLogger(__name__)
 
 
-# Positive denial cues — matched as substrings on the normalized chunk.
-# STT variants included (dropped apostrophes etc. handled by _normalize).
-_DENIAL_CUES = (
+# STRONG denial cues: "denied" used as an actual outcome on the claim/line.
+# When any of these appear (and no negation), the denial is certain — we
+# pivot WITHOUT asking GPT, so a GPT hallucination can never veto a real
+# denial. Missing a denial (billing thinks it's paid) is far worse than an
+# unnecessary rep call, so we bias hard toward pivoting on clear signals.
+_STRONG_DENIAL_CUES = (
+    "was denied",
+    "were denied",
+    "been denied",
+    "is denied",
+    "are denied",
+    "got denied",
+    "claim denied",
+    "claim was denied",
+    "line was denied",
+    "lines were denied",
+    "line item was denied",
+    "denied because",
+    "denied due to",
+    "denied for",
+    "denied as",
+    "denial of the claim",
+)
+
+# WEAK cues: a denial MIGHT be present but the phrasing is ambiguous
+# (conditional "if ... denied", a noun "denial" in passing, "not payable").
+# These only flag a candidate; the pivot then asks GPT to confirm.
+_WEAK_DENIAL_CUES = (
     "denied",
     "denial",
     "not payable",
     "no payment was made",
     "payment was not made",
+    "not covered",
 )
 
-# Negations that void a positive cue found in the same chunk. Checked
-# AFTER a positive hit; deliberately conservative — a false candidate flag
-# costs one GPT confirm at pivot time, a false negative loses the pivot.
+# Negations that void any positive cue in the same chunk.
 _NEGATION_CUES = (
     "not denied",
     "wasnt denied",
     "wasn't denied",
     "no denial",
+    "not a denial",
     "rather than denied",
+    "instead of denied",
+)
+
+# Conditional / hypothetical phrasings — "IF the claim is denied", "may be
+# denied", etc. These contain a strong cue but describe a possibility, not a
+# fact (same trap as the old is_claim_start "the first claim" false positive).
+# When present, downgrade STRONG → WEAK so GPT adjudicates instead of pivoting
+# outright.
+_CONDITIONAL_MARKERS = (
+    "if this claim is denied",
+    "if the claim is denied",
+    "if it is denied",
+    "if any claim is denied",
+    "if denied",
+    "may be denied",
+    "could be denied",
+    "might be denied",
+    "should the claim be denied",
+    "in case the claim is denied",
+    "were it denied",
 )
 
 
@@ -44,16 +89,29 @@ def _normalize(text: str) -> str:
     return " ".join(text.replace("’", "'").lower().split())
 
 
-def mentions_denial(text: str) -> bool:
-    """Cheap rule check: does this claim-readout chunk mention a denial?"""
+def denial_signal(text: str) -> str:
+    """Classify the denial signal in a piece of payer speech.
+
+    Returns "strong" (certain denial → pivot without GPT), "weak" (maybe →
+    GPT confirms), or "none".
+    """
     if not text:
-        return False
+        return "none"
     t = _normalize(text)
-    if not any(cue in t for cue in _DENIAL_CUES):
-        return False
     if any(neg in t for neg in _NEGATION_CUES):
-        return False
-    return True
+        return "none"
+    conditional = any(m in t for m in _CONDITIONAL_MARKERS)
+    if not conditional and any(cue in t for cue in _STRONG_DENIAL_CUES):
+        return "strong"
+    if conditional or any(cue in t for cue in _WEAK_DENIAL_CUES):
+        return "weak"
+    return "none"
+
+
+def mentions_denial(text: str) -> bool:
+    """Cheap rule check: does this claim-readout chunk mention a denial
+    (strong OR weak)? Used to raise the candidate flag during the readout."""
+    return denial_signal(text) in ("strong", "weak")
 
 
 _CONFIRM_PROMPT = """An automated phone agent just listened to an insurance IVR read out claim \
