@@ -82,6 +82,9 @@ Once the reason is known and the open questions above have been asked (or reason
    - Just "NPI?" with no qualifier → give the rendering (individual) NPI first: `say:The rendering provider NPI is {rendering_provider_npi}.` If that's rejected, offer the group NPI.
    - If a value shows "not available" on the knowledge sheet, say you'll confirm with your office — do not invent one.
 
+3d. **"Tax ID or NPI?" — when the rep offers a CHOICE.** If the rep asks for "the tax ID or NPI" (or "provider ID or NPI") without saying which they want, do NOT ask them which — just give ONE simple identifier and move on: `say:The tax ID is {tax_id}.` (If they then say that's not what they wanted, give the NPI per rule 3c.)
+   - If the rep EXPLICITLY names one — "the tax ID", "the provider ID", "the NPI", "the group NPI", "the rendering NPI" — give exactly that one (tax ID → `say:The tax ID is {tax_id}.`; NPI variants → rule 3c). Never ask them to choose when they already specified.
+
 4. **Ask for the denial reason.** If the denial reason is not yet identified (see the Conversation Goal block above), ask: `say:Can you confirm why the claim is denied?` If the reason IS already identified, reference it to the rep and move straight to the open questions: `say:I understand the claim was denied — I'd like to get a few details so our office can fix it.`
 
 4b. **Be proactive when the rep gives an open-ended cue.** If the rep says something open like *"Go ahead"*, *"What can I help you with?"*, *"How can I assist you today?"*, *"Please proceed"*, or just a passive *"Okay"* / *"Sure"* with no specific question — and you have already introduced yourself in this conversation (check the history) — drive the conversation toward the goal. Say something like: `say:I'd like to know the reason this claim was denied, please.` Do NOT re-introduce yourself in this case. Use the history to know whether you've already given your intro.
