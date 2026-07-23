@@ -73,6 +73,45 @@ async def _determine_outcome(snapshot: dict, call_tag: str, errors: list) -> tup
     is_incomplete = cleanup_reason in INCOMPLETE_REASONS
     storage_note = f" [Storage issue: {'; '.join(errors)}. call_id={call_tag}]" if errors else ""
 
+    # ── Denial follow-up pivot takes precedence over the claim classifier ────
+    # If the call pivoted into the denial flow, we ALREADY confirmed live (rule
+    # + GPT) that the final claim has a denied line and then talked to a rep.
+    # The normal claim classifier reads the raw readout and can call a PARTIAL
+    # denial "paid" (most lines paid) — which would hide the denial. The pivot
+    # fact is authoritative: force DENIED.
+    if snapshot.get("denial_pivoted"):
+        from src.core.denials.denial_reasons import get_reason, OUT_OF_SCOPE_KEY
+        key = snapshot.get("denial_reason_key")
+        verbatim = snapshot.get("denial_reason_verbatim") or ""
+        reason = get_reason(key)
+        if key == OUT_OF_SCOPE_KEY:
+            reason_label = f"reason OUT OF AGENT SCOPE: {verbatim or 'unspecified'}"
+        elif reason is not None:
+            reason_label = f"{reason.display_name} [{reason.group_code} {'/'.join(reason.carc_codes)}]"
+        else:
+            reason_label = "denial reason not identified during the call"
+
+        claim_summary = ""
+        if finalized_claims:
+            try:
+                claim_summary = " " + (await classify_claim(finalized_claims)).get("description", "")
+            except Exception as e:
+                logger.warning(f"denial-pivot claim summary failed (ignored): {e}")
+
+        claim_status = "denied"
+        incomplete_note = " Call ended before the follow-up was complete." if is_incomplete else ""
+        request_status = REQUEST_STATUS_FAILED if is_incomplete else REQUEST_STATUS_SUCCESS
+        description = (
+            f"DENIAL FOLLOW-UP — {reason_label}.{incomplete_note}{claim_summary}"
+        ).strip()
+        if errors:
+            description = f"{description} Storage issues: {'; '.join(errors)}."
+        logger.info(
+            f"🔀 Denial-pivoted call → claim_status='denied' (reason={key!r}, "
+            f"request_status={request_status!r})"
+        )
+        return request_status, claim_status, description
+
     if is_incomplete:
         # Call was cut short (auto_hangup / shutdown). Even if some claims were
         # captured before the cut, we can't trust the summary — the TRUE
