@@ -11,4 +11,4 @@ test_cigna_prompt.py
 
 .env.qa
 .env.prod
-config.json
+config.jsontest_denial_prompts.py
