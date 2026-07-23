@@ -410,8 +410,13 @@ async def _handle_denial_speech(text: str, call_state, call_control_id: str):
         template = get_denial_prompt_template("ivr")
         return template.format(transcript=text, **fmt)
 
+    # Rep-phase replies are full conversational sentences — the default
+    # max_tokens=50 (sized for one-word IVR commands) can truncate them
+    # mid-sentence. 80 covers the longest template-style replies with room.
+    _DENIAL_MAX_TOKENS = 80
+
     t0 = time.perf_counter()
-    response = await _call_gpt_api(_build_prompt())
+    response = await _call_gpt_api(_build_prompt(), max_tokens=_DENIAL_MAX_TOKENS)
     gpt_ms = (time.perf_counter() - t0) * 1000
     logger.info(f"GPT latency (denial/{call_state.phase}): {gpt_ms:.0f} ms")
     logger.info(f"GPT response (denial/{call_state.phase}): {response!r}")
@@ -422,7 +427,7 @@ async def _handle_denial_speech(text: str, call_state, call_control_id: str):
     if call_state.phase == "denial_ivr" and _is_gpt_rep_mode_signal(response):
         logger.info("→ GPT signaled rep_mode (human picked up — no transfer phrase heard)")
         _enter_denial_rep_phase(call_state)
-        response = await _call_gpt_api(_build_prompt())
+        response = await _call_gpt_api(_build_prompt(), max_tokens=_DENIAL_MAX_TOKENS)
         logger.info(f"GPT response (denial/rep re-run): {response!r}")
 
     append_conversation_step(call_state, text, response)
