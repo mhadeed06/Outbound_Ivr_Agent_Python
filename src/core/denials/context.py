@@ -45,34 +45,23 @@ def build_denial_format_kwargs(call_state) -> dict:
     env-configurable defaults (see module docstring).
     """
     visit_data = getattr(call_state, "visit_data", None) or {}
+    # provider_name is the ACTUAL provider (the doctor, e.g. "Irene Uke").
     provider_name = visit_data.get("provider_name") or os.getenv(
         "DENIAL_TEST_PROVIDER_NAME", "the provider on file"
     )
-    # Rep authentication (Humana and others) often asks for the INDIVIDUAL
-    # rendering provider / doctor name — distinct from the facility/group.
-    # Falls back to the facility name if not provided, but the rep may reject
-    # that; supply the real rendering provider whenever available.
-    rendering_provider_name = (
-        visit_data.get("rendering_provider_name")
-        or visit_data.get("provider_first_last")
-        or os.getenv("DENIAL_TEST_RENDERING_PROVIDER", provider_name)
-    )
-    # NPIs: a claim has an individual RENDERING provider NPI and the practice
-    # has a GROUP/billing NPI. Reps may ask for either — carry both. {npi} (the
-    # identification NPI used in the claim-status flow) is the rendering one by
-    # convention here, so default rendering_provider_npi to it.
-    rendering_provider_npi = visit_data.get("rendering_provider_npi") or visit_data.get("npi") or ""
+    # practice_name is the practice / group / facility (e.g. "ALPHA MENTAL
+    # HEALTH SERVICES"). Optional — only used if the rep asks for the practice.
+    practice_name = visit_data.get("practice_name") or os.getenv("DENIAL_TEST_PRACTICE_NAME", "")
+    # NPIs: {npi} is the provider's individual NPI (also used in identification);
+    # group_npi is the practice/billing NPI. Reps may ask for either.
     group_npi = visit_data.get("group_npi") or ""
-    group_tax_id = visit_data.get("group_tax_id") or visit_data.get("tax_id") or ""
     return {
         **visit_data,
         "billed_amount": visit_data.get("billed_amount")
         or os.getenv("DENIAL_TEST_BILLED_AMOUNT", "not available"),
         "provider_name": provider_name,
-        "rendering_provider_name": rendering_provider_name,
-        "rendering_provider_npi": rendering_provider_npi or "not available",
+        "practice_name": practice_name or "not provided",
         "group_npi": group_npi or "not available",
-        "group_tax_id": group_tax_id or "not available",
         "agent_persona_name": os.getenv("DENIAL_AGENT_PERSONA_NAME", "Kevin"),
         "callback_number": os.getenv("DENIAL_CALLBACK_NUMBER", "469-581-2969"),
     }
