@@ -10,6 +10,13 @@ from src.services.practice_ehr.post_call_upload import (
 
 logger = logging.getLogger(__name__)
 
+# Strong references to in-flight post-call upload tasks. asyncio only holds weak
+# references to tasks, so a bare create_task() result can be garbage-collected
+# mid-flight ("Task was destroyed but it is pending"). We drop the ref when the
+# task finishes. Concurrency itself is bounded inside upload_call_artifacts.
+_pending_upload_tasks: set = set()
+
+
 async def ensure_call_cleanup(
     call_control_id: str,
     *,
@@ -43,6 +50,18 @@ async def ensure_call_cleanup(
             return
 
         logger.info(f"🧹 Cleanup [{call_control_id}] due to: {reason}")
+
+        # 0️⃣ cancel any pending stream.py debounce task so a late STT final
+        # can't fire handle_user_speech AFTER we pop this call from
+        # active_calls (was causing KeyError: 'tax_id' from empty visit_data
+        # — see Task exception was never retrieved logs in App Insights).
+        try:
+            debounce_task = getattr(cs, "debounce_task", None)
+            if debounce_task is not None and not debounce_task.done():
+                debounce_task.cancel()
+                logger.info(f"[{call_control_id}] cancelled pending debounce task")
+        except Exception as e:
+            logger.warning(f"[{call_control_id}] debounce cancel error (ignored): {e}")
 
         # 1️⃣ stop claims flow
         try:
@@ -78,8 +97,33 @@ async def ensure_call_cleanup(
         logger.info(f"✅ Cleanup complete [{call_control_id}]")
 
     # 6️⃣ fire-and-forget upload of recording + transcript to PracticeEHR.
-    # Runs outside the cleanup lock so it doesn't block call teardown.
+    # Runs outside the cleanup lock so it doesn't block call teardown. Keep a
+    # strong reference until the task finishes so it isn't GC'd mid-flight.
     try:
-        asyncio.create_task(upload_call_artifacts(upload_snapshot))
+        task = asyncio.create_task(upload_call_artifacts(upload_snapshot))
+        _pending_upload_tasks.add(task)
+        task.add_done_callback(_pending_upload_tasks.discard)
     except Exception as e:
         logger.warning(f"[{call_control_id}] failed to schedule post-call upload: {e}")
+
+
+async def drain_pending_uploads(timeout: float = 8.0) -> None:
+    """Wait (bounded) for in-flight post-call upload tasks to finish.
+
+    Called on shutdown BEFORE the shared HTTP client is closed, so uploads
+    scheduled during teardown aren't cut off — and don't wake from their initial
+    sleep to find the shared client gone (which would make them build a fresh,
+    never-closed one). Bounded by `timeout` so shutdown can't hang.
+    """
+    pending = [t for t in _pending_upload_tasks if not t.done()]
+    if not pending:
+        return
+    logger.info(f"⏳ Draining {len(pending)} in-flight post-call upload(s) (timeout={timeout}s)")
+    try:
+        _, still_pending = await asyncio.wait(pending, timeout=timeout)
+        if still_pending:
+            logger.warning(
+                f"⚠️ {len(still_pending)} post-call upload(s) did not finish before shutdown drain timeout"
+            )
+    except Exception as e:
+        logger.warning(f"drain_pending_uploads error (ignored): {e}")

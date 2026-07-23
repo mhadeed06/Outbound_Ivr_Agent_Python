@@ -1,8 +1,9 @@
 import asyncio
+import contextvars
 import logging
-import queue
 import threading
 import os
+import time
 import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInputStream
 from typing import Dict, Callable, Optional
@@ -47,9 +48,14 @@ class AzureRealtimeSttService:
         self.websocket_id = websocket_id
         self.recognizer: Optional[speechsdk.SpeechRecognizer] = None
         self.push_stream: Optional[PushAudioInputStream] = None
-        self.audio_queue = queue.Queue()
         self.is_running = False
         self.recognition_thread: Optional[threading.Thread] = None
+        # Main event loop + the call context (insurance / call-id ContextVars),
+        # both captured when the async event handler is wired up. SDK callback
+        # threads use them to schedule the async result callbacks (see _dispatch)
+        # in the right context — the SDK's own threads carry neither.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ctx: Optional[contextvars.Context] = None
 
         # Your callbacks
         self.on_partial_result: Optional[Callable[[str], asyncio.Future]] = None
@@ -135,11 +141,10 @@ class AzureRealtimeSttService:
         """
         try:
             was_running = self.is_running
-            if self.recognizer:
-                try:
-                    self.recognizer.stop_continuous_recognition()
-                except Exception:
-                    pass
+            # Fully release the old recognizer (handlers + native connection)
+            # before building the new one, so a timeout change doesn't leak a
+            # Speech Service connection / SNAT port each time it happens.
+            self._disconnect_and_release_recognizer()
 
             # Rebuild config
             speech_config = speechsdk.SpeechConfig(
@@ -194,12 +199,14 @@ class AzureRealtimeSttService:
             self.recognizer.start_continuous_recognition()
             logger.info(f"[{self.websocket_id}] Started continuous recognition")
             while self.is_running:
-                # Keep thread alive
-                asyncio.run(asyncio.sleep(0.1))
+                # Keep this worker thread alive while the SDK recognizes on its
+                # own threads. Plain sleep — asyncio.run() here spun up and tore
+                # down a fresh event loop 10x/sec per call, burning CPU.
+                time.sleep(0.1)
         except Exception as e:
             logger.error(f"[{self.websocket_id}] Recognition worker error: {e}")
             if self.on_error:
-                asyncio.create_task(self.on_error(str(e)))
+                self._dispatch(self.on_error(str(e)))
 
     def feed_audio(self, audio_data: bytes):
         """Write each PCM chunk into the push stream."""
@@ -209,20 +216,59 @@ class AzureRealtimeSttService:
             except Exception as e:
                 logger.warning(f"[{self.websocket_id}] Error feeding audio: {e}")
 
+    def _dispatch(self, coro):
+        """Schedule an async result callback on the main loop from an SDK
+        callback thread, INSIDE the call context captured at wire-up, so the task
+        (and anything it spawns — the debounce task → handle_user_speech) inherits
+        the insurance / call-id ContextVars. The SDK's own callback thread carries
+        neither. No worker thread is held — no executor/DNS starvation, no ceiling."""
+        loop = self._loop
+        ctx = self._ctx
+        if loop is None or ctx is None or loop.is_closed():
+            # Not wired up yet, or the loop is shutting down — close the coroutine
+            # so it isn't GC'd as "never awaited".
+            coro.close()
+            return
+
+        async def _runner():
+            try:
+                await coro
+            except Exception as e:
+                logger.error(f"[{self.websocket_id}] STT callback error: {e}")
+
+        runner = _runner()
+
+        def _schedule():
+            # Runs on the loop thread inside `ctx`, so the created task copies
+            # `ctx` (insurance + call-id) instead of the SDK thread's empty context.
+            try:
+                loop.create_task(runner)
+            except Exception as e:
+                # Very unlikely on a running loop, but keep the cleanup guarantee
+                # airtight: release both coroutines on any failure.
+                runner.close()
+                coro.close()
+                logger.error(f"[{self.websocket_id}] failed to schedule STT event: {e}")
+
+        try:
+            loop.call_soon_threadsafe(_schedule, context=ctx)
+        except Exception as e:
+            # Loop closed between the check above and scheduling — release both
+            # coroutines so neither leaks as "never awaited".
+            runner.close()
+            coro.close()
+            logger.error(f"[{self.websocket_id}] failed to schedule STT event: {e}")
+
     def _handle_recognizing(self, evt):
         """Intermediate (partial) results."""
         if evt.result.text and self.on_partial_result:
-            self.audio_queue.put(
-                TranscriptionEvent(EventType.PARTIAL, evt.result.text, self.websocket_id)
-            )
+            self._dispatch(self.on_partial_result(evt.result.text))
 
     def _handle_recognized(self, evt):
         """Final results (utterance complete)."""
         if evt.result.text and self.on_final_result:
             logger.info(f"[STT {self.websocket_id}] Final: {evt.result.text}")
-            self.audio_queue.put(
-                TranscriptionEvent(EventType.FINAL, evt.result.text, self.websocket_id)
-            )
+            self._dispatch(self.on_final_result(evt.result.text))
 
     def _handle_session_started(self, evt):
         logger.info(f"[STT {self.websocket_id}] Speech session started")
@@ -238,36 +284,59 @@ class AzureRealtimeSttService:
         code = getattr(evt, "error_code", "")
         logger.error(f"[STT {self.websocket_id}] ❌ Recognition canceled: reason={reason} code={code} details={details!r}")
         if reason == speechsdk.CancellationReason.Error and self.on_error:
-            asyncio.create_task(self.on_error(f"Error: {details}"))
+            self._dispatch(self.on_error(f"Error: {details}"))
+
+    def _disconnect_and_release_recognizer(self):
+        """Detach handlers, stop recognition, and release the native recognizer
+        plus its Speech Service connection so the outbound (SNAT) port is freed
+        promptly instead of lingering until GC finalizes the SDK object."""
+        rec = self.recognizer
+        if not rec:
+            return
+        # Detach handlers first so a teardown-triggered 'canceled'/'stopped'
+        # event can't fire our callbacks (e.g. on_error) while we're closing,
+        # and so the recognizer↔bound-method reference cycle is broken for GC.
+        for signal_name in ("recognizing", "recognized", "session_started",
+                            "session_stopped", "canceled"):
+            try:
+                getattr(rec, signal_name).disconnect_all()
+            except Exception:
+                pass
+        try:
+            rec.stop_continuous_recognition()
+        except Exception:
+            pass
+        # Best-effort: close the underlying websocket now rather than waiting for
+        # GC. Older SDKs may not expose this; the ref drop below still releases it.
+        try:
+            speechsdk.Connection.from_recognizer(rec).close()
+        except Exception:
+            pass
+        self.recognizer = None
 
     def stop(self):
-        """Stops recognition and cleans up."""
+        """Stops recognition and releases the Speech Service connection."""
         self.is_running = False
-        if self.recognizer:
-            self.recognizer.stop_continuous_recognition()
+        self._disconnect_and_release_recognizer()
         if self.push_stream:
-            self.push_stream.close()
+            try:
+                self.push_stream.close()
+            except Exception:
+                pass
+            self.push_stream = None
         if self.recognition_thread:
             self.recognition_thread.join(timeout=5.0)
+            self.recognition_thread = None
         logger.info(f"[STT {self.websocket_id}] Cleanup complete")
 
     def start_async_event_handler(self, loop: asyncio.AbstractEventLoop):
-        """Begin pulling events off the queue on your main loop."""
-        loop.create_task(self._process_events())
-
-    async def _process_events(self):
-        while self.is_running:
-            try:
-                event = await asyncio.get_event_loop().run_in_executor(None, self.audio_queue.get)
-                if event.event_type == EventType.PARTIAL and self.on_partial_result:
-                    await self.on_partial_result(event.text)
-                elif event.event_type == EventType.FINAL and self.on_final_result:
-                    await self.on_final_result(event.text)
-                elif event.event_type == EventType.ERROR and self.on_error:
-                    await self.on_error(event.text)
-            except Exception as e:
-                logger.error(f"[{self.websocket_id}] Error in event handler: {e}")
-                break
+        """Capture the main event loop AND the current call context. This runs on
+        the WebSocket task right after set_call_id() / set_active_insurance(), so
+        the snapshot carries those ContextVars; _dispatch schedules the async
+        result callbacks inside it so downstream tasks (handle_user_speech, the
+        debounce task) see the right insurance/call-id. No pump thread is held."""
+        self._loop = loop
+        self._ctx = contextvars.copy_context()
 
 
 class AzureRealtimeSttManager:

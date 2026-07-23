@@ -16,7 +16,7 @@ from src.services.billing_log.log_client import create_billing_log_row
 from src.services.clinical.client import ClinicalApiError, fetch_visit_data
 from src.services.clinical.required_fields import missing_fields_for
 from src.services.practice_ehr_auth.client import AuthApiError, fetch_api_key_for_customer
-from src.utils.logging_config import set_call_id
+from src.utils.logging_config import set_call_id, set_visit_context
 from src.models.data_models import CallState
 import src.services.telnyx.client as telnyx_client
 
@@ -190,8 +190,9 @@ def make_orchestrate_router(
                 logger.error(f"❌ Missing call_control_id in response: {body!r}")
                 return _respond(False, "Telnyx response missing call_control_id", http_status=500)
 
-            # Tag every subsequent log line with the short call ID.
+            # Tag every subsequent log line with the short call ID + visit context.
             set_call_id(call_control_id)
+            set_visit_context(visit_id, customer_id)
 
             # ── create initial Billing-Agent/Log row to reserve a RefNo ──────
             # Done AFTER Telnyx accepts the call so we don't insert orphan

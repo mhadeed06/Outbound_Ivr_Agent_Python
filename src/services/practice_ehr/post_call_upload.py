@@ -42,8 +42,26 @@ CLAIMS_NOT_FOUND_REASON = "claims: not found"
 REQUEST_STATUS_SUCCESS = "call successful"
 REQUEST_STATUS_FAILED = "call failed"
 
+# Bound how many post-call uploads run concurrently. A hangup burst schedules
+# one upload task per call (fire-and-forget); without a cap they pile up dozens
+# of simultaneous outbound requests and exhaust SNAT ports. Excess tasks wait on
+# the semaphore and drain as slots free — nothing is dropped.
+_MAX_CONCURRENT_UPLOADS = int(os.getenv("MAX_CONCURRENT_POST_CALL_UPLOADS", "4"))
+_upload_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_UPLOADS)
+
 
 async def upload_call_artifacts(snapshot: dict) -> None:
+    """Concurrency-bounded entry point for the post-call upload.
+
+    Callers fire this and forget it (one per hangup). The semaphore caps how
+    many run at once so a burst can never flood outbound SNAT ports; queued
+    tasks simply wait their turn.
+    """
+    async with _upload_semaphore:
+        await _run_upload_call_artifacts(snapshot)
+
+
+async def _run_upload_call_artifacts(snapshot: dict) -> None:
     """
     Uploads the recording and transcript JSON for a finished call, then
     records the outcome in the Billing-Agent/Log DB.
@@ -69,6 +87,15 @@ async def upload_call_artifacts(snapshot: dict) -> None:
     # The call was cut short (timeout / shutdown) → data is incomplete and the
     # claim status can't be trusted. Mark the whole call as failed.
     is_incomplete = cleanup_reason in INCOMPLETE_REASONS
+
+    # A call that captured no real interaction (no transcript lines, no claims)
+    # has no useful recording — this is exactly the profile of the hangup-burst
+    # calls whose recording fetches piled up outbound connections. Skip the
+    # Telnyx fetch/upload for them; the outcome is still classified and logged
+    # below, so the billing row is unaffected. (Never skip the explicit
+    # "no claims found" success path.)
+    no_interaction = transcript_lines <= 1 and not finalized_claims
+    skip_recording = no_interaction and cleanup_reason != CLAIMS_NOT_FOUND_REASON
 
     logger.info(
         f"📤 post_call_upload START: customer_id={customer_id} visit_id={visit_id} "
@@ -97,7 +124,12 @@ async def upload_call_artifacts(snapshot: dict) -> None:
     # 1) Recording ───────────────────────────────────────────────────────────
     recording_path = ""
     telnyx_api_key = os.getenv("TELNYX_API_KEY", "")
-    if call_session_id:
+    if skip_recording:
+        logger.info(
+            "⏭️ Skipping Telnyx recording fetch — call captured no interaction "
+            f"(transcript_lines={transcript_lines}, claims={len(finalized_claims)})"
+        )
+    elif call_session_id:
         logger.info(f"🎙 Fetching Telnyx recording for session {call_session_id}")
         result = await fetch_recording_wav(call_session_id, telnyx_api_key)
         if result:
@@ -185,10 +217,9 @@ async def upload_call_artifacts(snapshot: dict) -> None:
         description = "No claims found for this patient." + storage_note
 
     else:
-        # Any other failure (ended-before-claims-flow, IVR verification
-        # failure, agent-routed, etc.) → run the failure classifier so the
-        # frontend still gets an actionable status update.
-        request_status = REQUEST_STATUS_FAILED
+        # Any other outcome (ended-before-claims-flow, IVR verification failure,
+        # agent-routed, or a no-claim that the real-time detector missed) →
+        # run the classifier and trust its verdict.
         plain_transcript = build_plain_transcript(
             snapshot.get("full_transcript") or []
         )
@@ -197,13 +228,20 @@ async def upload_call_artifacts(snapshot: dict) -> None:
             cleanup_reason=cleanup_reason,
             call_tag=call_tag,
         )
-        claim_status = failure["status"]           # "patient not found" | "call failed"
+        claim_status = failure["status"]           # "no claim" | "patient not found" | "call failed"
         description = failure["description"]
+        # "no claim" = payer verified patient and told us no claim exists for
+        # the DOS. That's a SUCCESSFUL call — the classifier caught what the
+        # real-time detector missed. Everything else is a failure.
+        request_status = (
+            REQUEST_STATUS_SUCCESS if claim_status == "no claim"
+            else REQUEST_STATUS_FAILED
+        )
         if errors:
             description = f"{description} Storage issues: {'; '.join(errors)}."
         logger.info(
-            f"⚠️ Failure classified (reason: {cleanup_reason!r}) → "
-            f"claim_status={claim_status!r}"
+            f"⚠️ Classified (reason: {cleanup_reason!r}) → "
+            f"claim_status={claim_status!r} request_status={request_status!r}"
         )
 
     # 4) Update Billing-Agent/Log ────────────────────────────────────────────

@@ -13,7 +13,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from src.models.data_models import CallState
 from src.services.azure.stt_service import stt_manager, convert_mulaw_to_pcm, AzureRealtimeSttService
 from src.config.insurance_config import config_manager, set_active_insurance_by_name
-from src.utils.logging_config import set_call_id
+from src.utils.logging_config import set_call_id, set_visit_context
 
 # Default initial debounce — per-call values come from call_state once the
 # 'start' event is received and we know which call this WebSocket belongs to.
@@ -106,6 +106,11 @@ def make_stream_router(
                 state.debounce_task.cancel()
             #logger.info(f"▶️ Creating NEW debounce task with {state.debounce_time}s timer")
             state.debounce_task = asyncio.create_task(_process_after_quiet())
+            # Expose the task to CallState so ensure_call_cleanup can cancel
+            # it when the call ends. Prevents late STT finals from firing
+            # handle_user_speech for a call that's already been cleaned up.
+            if call_state is not None:
+                call_state.debounce_task = state.debounce_task
 
 
         async def _flush_pending_now():
@@ -188,6 +193,10 @@ def make_stream_router(
                     cs_lookup = active_calls.get(call_control_id)
                     if cs_lookup and cs_lookup.insurance_name:
                         set_active_insurance_by_name(cs_lookup.insurance_name)
+                    # Restore visit_id/customer_id log context so every log
+                    # line from this WebSocket carries the visit tag.
+                    if cs_lookup:
+                        set_visit_context(cs_lookup.visit_id, cs_lookup.customer_id)
 
                     logger.info(f" Call started: {call_control_id}")
 

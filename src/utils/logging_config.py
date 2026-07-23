@@ -27,6 +27,11 @@ COLORS = {
 # AFTER the "v3:" prefix, which is stable and unique per call.
 # ────────────────────────────────────────────────────────────────────────────
 _call_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("call_id", default="-")
+# visit_id / customer_id are set at orchestrate/webhook/stream entry alongside
+# set_call_id. Included on every log line so ops can grep a specific visit or
+# customer's calls end-to-end.
+_visit_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("visit_id", default="-")
+_customer_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("customer_id", default="-")
 
 SHORT_TAG_WIDTH = 8
 
@@ -47,6 +52,13 @@ def set_call_id(call_control_id: str) -> None:
     _call_id_var.set(_shorten(call_control_id))
 
 
+def set_visit_context(visit_id, customer_id) -> None:
+    """Attach visit_id and customer_id to the current task's log context.
+    Grep in App Insights with 'v=<visit_id>' or 'cid=<customer_id>'."""
+    _visit_id_var.set(str(visit_id) if visit_id is not None else "-")
+    _customer_id_var.set(str(customer_id) if customer_id is not None else "-")
+
+
 def get_call_id() -> str:
     return _call_id_var.get()
 
@@ -59,9 +71,13 @@ def shorten_call_id(call_control_id: str) -> str:
 
 
 class CallIdFilter(logging.Filter):
-    """Injects the current call's short tag onto every log record."""
+    """Injects the current call's short tag + visit/customer IDs onto every
+    log record. All three are ContextVars → cost is a dict lookup per record,
+    no I/O and no allocation of consequence."""
     def filter(self, record: logging.LogRecord) -> bool:
         record.call_id = _call_id_var.get()
+        record.visit_id = _visit_id_var.get()
+        record.customer_id = _customer_id_var.get()
         return True
 
 
@@ -73,7 +89,16 @@ class ColorFormatter(logging.Formatter):
         return super().format(record)
 
 
-LOG_FORMAT = "[%(asctime)s - %(levelname)s - %(call_id)-8s - %(filename)s - %(funcName)s] %(message)s"
+class BelowErrorFilter(logging.Filter):
+    """Passes only records below ERROR. Used so INFO/WARNING go to stdout while
+    ERROR/CRITICAL go to stderr — Azure App Service (and most container log
+    collectors) classify *anything* on stderr as ERROR, so without this split a
+    single stderr-defaulted StreamHandler made every INFO line surface as an error."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < logging.ERROR
+
+
+LOG_FORMAT = "[%(asctime)s - %(levelname)s - c=%(call_id)-8s v=%(visit_id)s cid=%(customer_id)s - %(filename)s - %(funcName)s] %(message)s"
 
 logging_config = {
     "version": 1,
@@ -81,6 +106,9 @@ logging_config = {
     "filters": {
         "call_id": {
             "()": CallIdFilter,
+        },
+        "below_error": {
+            "()": BelowErrorFilter,
         },
     },
     "formatters": {
@@ -94,17 +122,37 @@ logging_config = {
             "datefmt": "%Y-%m-%d %H:%M:%S",
         },
     },
+    # Split output by level across two streams. A single StreamHandler defaults
+    # to stderr, and Azure App Service classifies everything on stderr as ERROR —
+    # which is why every INFO/WARNING line was showing up as an error. INFO and
+    # WARNING now go to stdout; ERROR and CRITICAL go to stderr, so the platform
+    # classifies each line correctly.
     "handlers": {
-        "default": {
+        "stdout": {
             "level": "INFO",
             "formatter": "colored",
             "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            "filters": ["call_id", "below_error"],
+        },
+        "stderr": {
+            "level": "ERROR",
+            "formatter": "colored",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
             "filters": ["call_id"],
         },
     },
+    # Route uvicorn's own loggers through the same split so its INFO lines
+    # (startup banner, "connection closed") aren't mislabeled as errors either.
+    "loggers": {
+        "uvicorn": {"level": "INFO", "handlers": ["stdout", "stderr"], "propagate": False},
+        "uvicorn.error": {"level": "INFO", "handlers": ["stdout", "stderr"], "propagate": False},
+        "uvicorn.access": {"level": "INFO", "handlers": ["stdout", "stderr"], "propagate": False},
+    },
     "root": {
         "level": "INFO",
-        "handlers": ["default"],
+        "handlers": ["stdout", "stderr"],
     },
 }
 

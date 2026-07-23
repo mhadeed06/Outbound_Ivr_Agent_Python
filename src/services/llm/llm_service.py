@@ -76,6 +76,57 @@ def _after(s: str, low: str, keyword: str) -> str | None:
     return s[j:].strip()
 
 
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance. Used only on short ID strings so O(n*m) is fine."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        for j, cb in enumerate(b, 1):
+            curr.append(min(
+                curr[-1] + 1,               # insert
+                prev[j] + 1,                # delete
+                prev[j - 1] + (ca != cb),   # substitute
+            ))
+        prev = curr
+    return prev[-1]
+
+
+def _correct_hallucinated_member_id(gpt_echo: str, visit_data: dict) -> str | None:
+    """Detect GPT character-substitution on member_id (1↔I, 0↔O, 5↔S, etc.).
+
+    Returns the authoritative member_id only when GPT's echo is same length
+    and edit distance ≤ 2 from the real member_id. Otherwise returns None so
+    the caller uses GPT's value unchanged.
+
+    Only touches member_id — tax_id, npi, dob, dos, member_name are numeric
+    or structured and don't have this failure mode. All-digit member_ids are
+    also skipped: they aren't prone to letter/digit confusion.
+    """
+    real = visit_data.get("member_id")
+    if not real or not isinstance(real, str):
+        return None
+    if not any(c.isalpha() for c in real):
+        return None
+
+    norm_gpt = gpt_echo.strip().upper().replace(" ", "").replace("-", "")
+    norm_real = real.strip().upper().replace(" ", "").replace("-", "")
+
+    if norm_gpt == norm_real:
+        return None
+    if len(norm_gpt) != len(norm_real):
+        return None
+    if _edit_distance(norm_gpt, norm_real) > 2:
+        return None
+
+    return real
+
+
 # ---- response handler (dependencies injected) ----
 async def _process_llama_response(
     response: str,
@@ -113,6 +164,14 @@ async def _process_llama_response(
         logger.info("Llama returned fallback; ignoring")
         return
 
+    # claim_mode is handled in main.py BEFORE this function is called (safety-net
+    # for is_claim_start). Guard here as defense in depth so it never falls
+    # through as "unrecognized" if the flow ever reroutes.
+    compact_signal = low.replace(" ", "").replace("_", "").rstrip(".,!?:;'\"")
+    if compact_signal == "claimmode":
+        logger.info("Llama returned claim_mode; already handled upstream, ignoring")
+        return
+
     # 1) DTMF (explicit only)
     if low.startswith("dtmf"):
         tail = _after(s, low, "dtmf") or ""
@@ -128,6 +187,21 @@ async def _process_llama_response(
     for kw in ("say", "value", "confirm"):
         val = _after(s, low, kw)
         if val:
+            # GPT sometimes substitutes look-alike characters when echoing
+            # alphanumeric member_ids (U1 → UI, O0 → OO, 5 → S). Match against
+            # the authoritative member_id from visit_data and correct if it
+            # looks like a hallucination (same length, edit distance ≤ 2).
+            if kw == "value":
+                call_state = active_calls.get(call_control_id)
+                visit_data = getattr(call_state, "visit_data", None) if call_state else None
+                if visit_data:
+                    corrected = _correct_hallucinated_member_id(val, visit_data)
+                    if corrected is not None and corrected != val:
+                        logger.warning(
+                            f"⚠️ GPT hallucinated member_id: sent {val!r}, "
+                            f"corrected to {corrected!r}"
+                        )
+                        val = corrected
             logger.info(f"→ Speak ({kw}): {val!r}")
             await speak_with_azure(val, call_control_id)
             return
