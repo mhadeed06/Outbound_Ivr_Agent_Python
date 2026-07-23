@@ -143,4 +143,9 @@ def render_denial_context(call_state) -> str:
         "asked but may not have a usable answer yet — check the conversation history. "
         "The history below is the ground truth; these markers are hints."
     )
+    lines.append(
+        "NOTE: The call-reference number is NOT in this list on purpose — it is "
+        "captured automatically from the transcript. Never ask the rep/IVR to read "
+        "or repeat a reference/claim/fax number; stay silent while numbers are read."
+    )
     return "\n".join(lines)

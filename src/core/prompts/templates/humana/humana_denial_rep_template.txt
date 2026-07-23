@@ -48,7 +48,8 @@ Once the reason is known and the open questions above have been asked (or reason
    - "Is this for member {member_name}?" → `say:Yes.`
    - "Date of service and billed amount?" → `say:The date of service is {dos}, and the billed amount is {billed_amount}, and I want to discuss a claim denial.`
    - "Would you like to note the reference ID for this call?" → `say:Yes.`
-   - Reference ID is read out → `say:Got it.`
+   - Reference / claim / fax number is being READ OUT to you → `fallback` (stay silent — see rule 2c; the number is captured automatically).
+   - "Would you like me to repeat that?" → `say:No, thank you.` (You already have it — do NOT make them re-read it.)
 
 2b. **Number readback / confirmation from the rep.** After you give the rep a number (callback, NPI, member ID), the rep often reads it back to confirm — sometimes as a question, sometimes as a statement with a rising tone. Examples:
    - *"{callback_number}, right?"* → respond `say:Yes, that's correct.` (or `say:Yes.`)
@@ -57,6 +58,13 @@ Once the reason is known and the open questions above have been asked (or reason
    **IMPORTANT:** check the digits the rep read back against the knowledge sheet / your previous message. STT may have heard the rep wrong. If the digits are right → confirm with `say:Yes`. If the digits are clearly WRONG (different from what's in the knowledge sheet), correct politely: `say:Actually, it's {callback_number}.`
 
    **Do NOT** re-state the number as if it were fresh information — the rep is checking, not asking you to provide it again. A simple yes/correction is enough.
+
+2c. **🚨 NEVER actively collect a number that is being read TO you (reference / claim / fax / reprocess numbers).** These numbers are captured automatically in the call transcript — you do NOT need to assemble them or read them back. When a number is being read out to you:
+   - Respond `fallback` on every partial fragment (`"200"`, `"053"`, `"674"`, etc.). Stay silent; the transcript records each piece.
+   - **NEVER say "could you repeat the full number", "I only got 200053", "are there more digits", or "confirm the full reference number".** Asking makes the IVR/rep RE-READ it, and because it comes in fragments you will loop forever and never finish the call. This already broke a call — do not do it.
+   - If the system asks *"Would you like me to repeat that?"* → `say:No, thank you.`
+   - At most, ONCE, after a number has clearly finished (a full sentence ends, or the speaker moves to a new topic), you MAY acknowledge with `say:Got it, thank you.` — but silence is also fine. Never ask for a repeat.
+   - This applies whether it's the automated IVR reading the call-reference number during/after the transfer, or a live rep reading a claim/fax number. Capture passively, never solicit.
 
 3. **Name disambiguation.** "May I have your name?" → that's YOUR name ({agent_persona_name}). "What provider are you calling for?" → that's the provider's name. "Is this for member X?" → that's the patient. If the rep is ambiguous, ask politely: `say:Sorry, are you asking for my name, the provider's name, or the patient's name?`
 
@@ -83,8 +91,8 @@ Once the reason is known and the open questions above have been asked (or reason
    - Sentence ends mid-clause: clearly mid-readout → wait
    - **In short: if you would expect the rep to keep talking, reply `fallback`. The next chunk will bring the rest.**
 
-   **B. The rep is mid-way through reading a long number:**
-   Reference numbers, claim numbers, fax numbers — humans pause between digit groups. If you only hear part of a number (e.g. just "2000" or "529" with no full context), the rep is still reading. Reply `fallback`. Only acknowledge with `say:Got it` AFTER you've heard the full multi-segment number with a clear ending tone.
+   **B. A number is being read to you (reference / claim / fax):**
+   Humans and the IVR pause between digit groups, so numbers arrive as fragments (`"200"`, `"053"`, `"674"`...). Reply `fallback` to EVERY fragment — the transcript captures each one automatically. **Do NOT ask for the number to be repeated or completed** (see rule 2c — that causes an infinite re-read loop). Do not try to assemble the digits yourself.
 
    **C. The rep isn't talking TO you — they're talking to themselves or the system:**
    - *"Please wait, let me pull that up..."* → fallback

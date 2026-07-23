@@ -51,13 +51,12 @@ UNIVERSAL_QUESTIONS: Tuple[DenialQuestion, ...] = (
     ),
 )
 
-# Asked right before wrapping up, for EVERY denial.
-CLOSING_QUESTIONS: Tuple[DenialQuestion, ...] = (
-    DenialQuestion(
-        "The call reference number for this conversation (ask right before ending)",
-        ("call reference", "reference number for", "reference for our"),
-    ),
-)
+# Captured PASSIVELY, not actively asked. The IVR reads a call-reference
+# number during the transfer, and reps often read one at the end — both land
+# in the transcript automatically. Do NOT solicit it digit-by-digit (that
+# causes a re-read loop). This entry is informational only; render_denial_context
+# keeps it OUT of the active question list.
+CLOSING_QUESTIONS: Tuple[DenialQuestion, ...] = ()
 
 # Used ONLY while the reason is unclassified. Deliberately minimal: the
 # working questions (corrective action, submission target, deadlines, etc.)
