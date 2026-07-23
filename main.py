@@ -586,6 +586,29 @@ app.include_router(
 )
 
 
+# DEV-ONLY test endpoint (inline visit data, no PracticeEHR writes).
+# Route returns 404 unless ENABLE_TEST_CALL_ENDPOINT=true — safe to ship.
+from src.api.v1.orchestrate_test import make_orchestrate_test_router
+app.include_router(
+    make_orchestrate_test_router(
+        active_calls,
+        initiated_events,
+        TELNYX_BASE_URL=TELNYX_BASE_URL,
+        HEADERS=HEADERS,
+        TEL_FROM=TEL_FROM,
+        CALL_CONTROL_APP_ID=CALL_CONTROL_APP_ID,
+        WEBHOOK_BASE_URL=WEBHOOK_BASE_URL,
+        STREAM_BASE_URL=STREAM_BASE_URL,
+        auto_hangup_fn=lambda call_id, delay_seconds: auto_hangup(
+            call_id,
+            active_calls,
+            ensure_call_cleanup,
+            delay_seconds
+        ),
+    )
+)
+
+
 # NEW: mount webhooks router (pass the SAME live state + cleanup fn)
 app.include_router(
     make_webhooks_router(

@@ -32,6 +32,12 @@ class CallState:
     visit_id: Optional[str] = None
     customer_id: Optional[str] = None
 
+    # Test-mode call (started via /v1/Billing-Agent/Call/Test with inline
+    # visit data — no Auth/Clinical lookups). The post-call pipeline runs
+    # the outcome classification but LOGS what it would write instead of
+    # touching any PracticeEHR endpoint.
+    is_test: bool = False
+
     # Resolved from the Clinical API plan name at call creation. Used by
     # webhooks/stream to restore the insurance ContextVar when a new request
     # for this call arrives.

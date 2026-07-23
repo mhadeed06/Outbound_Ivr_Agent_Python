@@ -61,6 +61,110 @@ async def upload_call_artifacts(snapshot: dict) -> None:
         await _run_upload_call_artifacts(snapshot)
 
 
+async def _determine_outcome(snapshot: dict, call_tag: str, errors: list) -> tuple:
+    """Decide (request_status, claim_status, description) for a finished call.
+
+    Extracted from the upload path so TEST-MODE calls run the exact same
+    classification logic (nothing diverges between test and prod decisions);
+    test mode just logs the result instead of writing it.
+    """
+    cleanup_reason = snapshot.get("cleanup_reason", "")
+    finalized_claims = snapshot.get("finalized_claims", []) or []
+    is_incomplete = cleanup_reason in INCOMPLETE_REASONS
+    storage_note = f" [Storage issue: {'; '.join(errors)}. call_id={call_tag}]" if errors else ""
+
+    if is_incomplete:
+        # Call was cut short (auto_hangup / shutdown). Even if some claims were
+        # captured before the cut, we can't trust the summary — the TRUE
+        # status is usually in the LAST claim of the call, and any partial
+        # capture could mislead the billing team. Always mark as failure.
+        request_status = REQUEST_STATUS_FAILED
+        plain_transcript = build_plain_transcript(
+            snapshot.get("full_transcript") or []
+        )
+        failure = await classify_failure(
+            transcript=plain_transcript,
+            cleanup_reason=cleanup_reason,
+            call_tag=call_tag,
+        )
+        claim_status = failure["status"]           # usually "call failed"
+        description = failure["description"]
+        if errors:
+            description = f"{description} Storage issues: {'; '.join(errors)}."
+        logger.info(
+            f"⚠️ Incomplete call ({cleanup_reason}) → claim_status={claim_status!r}"
+        )
+
+    elif finalized_claims:
+        # We reached the claims flow and captured claim(s) → classify.
+        # (Existing successful path — unchanged.)
+        request_status = REQUEST_STATUS_SUCCESS
+        result = await classify_claim(finalized_claims)
+        claim_status = result["status"]
+        description = result["description"] + storage_note
+
+    elif cleanup_reason == CLAIMS_NOT_FOUND_REASON:
+        # The IVR explicitly told us there are no claims for this patient.
+        # (Existing successful path — unchanged.)
+        request_status = REQUEST_STATUS_SUCCESS
+        claim_status = "no claim"
+        description = "No claims found for this patient." + storage_note
+
+    else:
+        # Any other outcome (ended-before-claims-flow, IVR verification failure,
+        # agent-routed, or a no-claim that the real-time detector missed) →
+        # run the classifier and trust its verdict.
+        plain_transcript = build_plain_transcript(
+            snapshot.get("full_transcript") or []
+        )
+        failure = await classify_failure(
+            transcript=plain_transcript,
+            cleanup_reason=cleanup_reason,
+            call_tag=call_tag,
+        )
+        claim_status = failure["status"]           # "no claim" | "patient not found" | "call failed"
+        description = failure["description"]
+        # "no claim" = payer verified patient and told us no claim exists for
+        # the DOS. That's a SUCCESSFUL call — the classifier caught what the
+        # real-time detector missed. Everything else is a failure.
+        request_status = (
+            REQUEST_STATUS_SUCCESS if claim_status == "no claim"
+            else REQUEST_STATUS_FAILED
+        )
+        if errors:
+            description = f"{description} Storage issues: {'; '.join(errors)}."
+        logger.info(
+            f"⚠️ Classified (reason: {cleanup_reason!r}) → "
+            f"claim_status={claim_status!r} request_status={request_status!r}"
+        )
+
+    return request_status, claim_status, description
+
+
+async def _log_test_outcome(snapshot: dict, call_tag: str) -> None:
+    """TEST MODE: run the real outcome classification, then LOG everything the
+    prod pipeline would have written — recording/transcript upload, the
+    Billing-Agent/Log PUT/POST, and the IVR/ClaimStatus PATCH — without
+    touching any PracticeEHR endpoint."""
+    request_status, claim_status, description = await _determine_outcome(
+        snapshot, call_tag, errors=[]
+    )
+    transcript_lines = len(snapshot.get("full_transcript", []) or [])
+    logger.info(
+        "🧪 TEST MODE — post-call summary (NOTHING written to any endpoint):\n"
+        f"    would-be requestStatus : {request_status!r}\n"
+        f"    would-be claimStatus   : {claim_status!r}\n"
+        f"    would-be description   : {description!r}\n"
+        f"    transcript_lines={transcript_lines} claims={len(snapshot.get('finalized_claims') or [])} "
+        f"cleanup_reason={snapshot.get('cleanup_reason')!r}\n"
+        f"    denial_pivoted={snapshot.get('denial_pivoted')} "
+        f"denial_reason_key={snapshot.get('denial_reason_key')!r}\n"
+        f"    denial_reason_verbatim={snapshot.get('denial_reason_verbatim')!r}\n"
+        f"    skipped: recording fetch/upload, transcript upload, "
+        f"Billing-Agent/Log write, Ivr/ClaimStatus PATCH"
+    )
+
+
 async def _run_upload_call_artifacts(snapshot: dict) -> None:
     """
     Uploads the recording and transcript JSON for a finished call, then
@@ -103,6 +207,11 @@ async def _run_upload_call_artifacts(snapshot: dict) -> None:
         f"claims={len(finalized_claims)} reason={cleanup_reason!r} incomplete={is_incomplete} "
         f"auth_token_present={bool(auth_token)} api_key_present={bool(api_key)}"
     )
+
+    # TEST-MODE calls: classify + log the would-be writes, touch nothing.
+    if snapshot.get("is_test"):
+        await _log_test_outcome(snapshot, call_tag)
+        return
 
     if not customer_id:
         logger.warning("post_call_upload: no customer_id, skipping")
@@ -177,72 +286,9 @@ async def _run_upload_call_artifacts(snapshot: dict) -> None:
         errors.append("transcript upload failed")
 
     # 3) Determine outcome → requestStatus / claimStatus / description ─────────
-    storage_note = f" [Storage issue: {'; '.join(errors)}. call_id={call_tag}]" if errors else ""
-
-    if is_incomplete:
-        # Call was cut short (auto_hangup / shutdown). Even if some claims were
-        # captured before the cut, we can't trust the summary — the TRUE
-        # status is usually in the LAST claim of the call, and any partial
-        # capture could mislead the billing team. Always mark as failure.
-        request_status = REQUEST_STATUS_FAILED
-        plain_transcript = build_plain_transcript(
-            snapshot.get("full_transcript") or []
-        )
-        failure = await classify_failure(
-            transcript=plain_transcript,
-            cleanup_reason=cleanup_reason,
-            call_tag=call_tag,
-        )
-        claim_status = failure["status"]           # usually "call failed"
-        description = failure["description"]
-        if errors:
-            description = f"{description} Storage issues: {'; '.join(errors)}."
-        logger.info(
-            f"⚠️ Incomplete call ({cleanup_reason}) → claim_status={claim_status!r}"
-        )
-
-    elif finalized_claims:
-        # We reached the claims flow and captured claim(s) → classify.
-        # (Existing successful path — unchanged.)
-        request_status = REQUEST_STATUS_SUCCESS
-        result = await classify_claim(finalized_claims)
-        claim_status = result["status"]
-        description = result["description"] + storage_note
-
-    elif cleanup_reason == CLAIMS_NOT_FOUND_REASON:
-        # The IVR explicitly told us there are no claims for this patient.
-        # (Existing successful path — unchanged.)
-        request_status = REQUEST_STATUS_SUCCESS
-        claim_status = "no claim"
-        description = "No claims found for this patient." + storage_note
-
-    else:
-        # Any other outcome (ended-before-claims-flow, IVR verification failure,
-        # agent-routed, or a no-claim that the real-time detector missed) →
-        # run the classifier and trust its verdict.
-        plain_transcript = build_plain_transcript(
-            snapshot.get("full_transcript") or []
-        )
-        failure = await classify_failure(
-            transcript=plain_transcript,
-            cleanup_reason=cleanup_reason,
-            call_tag=call_tag,
-        )
-        claim_status = failure["status"]           # "no claim" | "patient not found" | "call failed"
-        description = failure["description"]
-        # "no claim" = payer verified patient and told us no claim exists for
-        # the DOS. That's a SUCCESSFUL call — the classifier caught what the
-        # real-time detector missed. Everything else is a failure.
-        request_status = (
-            REQUEST_STATUS_SUCCESS if claim_status == "no claim"
-            else REQUEST_STATUS_FAILED
-        )
-        if errors:
-            description = f"{description} Storage issues: {'; '.join(errors)}."
-        logger.info(
-            f"⚠️ Classified (reason: {cleanup_reason!r}) → "
-            f"claim_status={claim_status!r} request_status={request_status!r}"
-        )
+    request_status, claim_status, description = await _determine_outcome(
+        snapshot, call_tag, errors
+    )
 
     # 4) Update Billing-Agent/Log ────────────────────────────────────────────
     # Preferred path: PUT the row created at call start (RefNo from snapshot).
@@ -348,4 +394,11 @@ def snapshot_call_state(call_state, reason: str = "") -> dict:
         "plan_description": visit_data.get("plan_description"),
         # How the call ended — drives the success/failed outcome.
         "cleanup_reason": reason,
+        # Test-mode flag: classification runs, but nothing is written to any
+        # PracticeEHR endpoint — the would-be writes are logged instead.
+        "is_test": bool(getattr(call_state, "is_test", False)),
+        # Denial follow-up outcome (for logging now; persistence in a later phase).
+        "denial_pivoted": bool(getattr(call_state, "denial_pivoted", False)),
+        "denial_reason_key": getattr(call_state, "denial_reason_key", None),
+        "denial_reason_verbatim": getattr(call_state, "denial_reason_verbatim", None),
     }
