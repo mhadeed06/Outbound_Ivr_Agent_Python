@@ -57,13 +57,16 @@ def mentions_denial(text: str) -> bool:
 
 
 _CONFIRM_PROMPT = """An automated phone agent just listened to an insurance IVR read out claim \
-information for a patient. Decide whether the FINAL claim mentioned in the readout has a \
-status of DENIED.
+information for a patient. Decide whether the FINAL claim mentioned in the readout was DENIED, \
+fully OR partially.
 
 Rules:
 - Only the FINAL claim in the readout counts (earlier claims may have other statuses).
 - "denied" / "denial" stated for the final claim → YES.
-- "in process", "paid", "finalized", "approved", "pending", "no claims found" → NO.
+- PARTIAL denials count as YES: "some lines were denied and some lines were paid",
+  "line item ... was denied", "partially paid" with any denied line → YES.
+- "in process", "fully paid", "finalized" with no denied lines, "approved", "pending",
+  "no claims found" → NO.
 - If the readout is ambiguous or you cannot tell, answer NO.
 
 Answer with exactly one word: YES or NO.

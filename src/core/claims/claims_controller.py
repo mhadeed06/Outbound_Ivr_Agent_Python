@@ -7,6 +7,7 @@ from src.core.prompts.claims_prompts import get_claims_prompt
 from src.services.llm.llm_service import _call_gpt_api
 from src.core.claims.claims_intent_mapper import map_keyword
 from src.core.denials.detection import mentions_denial
+from src.core.denials.reason_classifier import match_reason_rules
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +75,20 @@ async def handle_final(call_id: str, utterance: str):
 
         # Live denial cue (free rule scan). Sets the cheap candidate flag on
         # CallState — the actual pivot decision happens on the STOP path and
-        # is confirmed by one GPT check there.
-        if mentions_denial(utterance):
-            _cs = claims_agent._active_calls.get(call_id) if claims_agent._active_calls else None
-            if _cs is not None and not getattr(_cs, "denial_candidate", False):
+        # is confirmed by one GPT check there. The readout chunk is also run
+        # through the denial-reason rules: the IVR often names the reason
+        # right in the readout, giving the rep phase a head start.
+        _cs = claims_agent._active_calls.get(call_id) if claims_agent._active_calls else None
+        if _cs is not None:
+            if mentions_denial(utterance) and not getattr(_cs, "denial_candidate", False):
                 _cs.denial_candidate = True
                 logger.info(f"[{call_id}] 🩺 Denial cue heard in claim readout — candidate flagged")
+            if getattr(_cs, "denial_reason_key", None) is None:
+                _hit = match_reason_rules(utterance)
+                if _hit is not None:
+                    _cs.denial_reason_key = _hit.key
+                    _cs.denial_reason_verbatim = utterance.strip()[:300]
+                    logger.info(f"[{call_id}] 🧭 Denial reason pre-classified from readout: {_hit.key}")
 
         insurance_name = config_manager.get_insurance_name()
 

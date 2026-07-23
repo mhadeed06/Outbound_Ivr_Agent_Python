@@ -18,6 +18,11 @@ from src.core.prompts.manager import get_main_prompt_template, get_denial_prompt
 from src.core.denials.transition import is_transfer_signal
 from src.core.denials.detection import confirm_denial_via_gpt
 from src.core.denials.context import build_denial_format_kwargs, render_denial_context
+from src.core.denials.reason_classifier import (
+    match_reason_rules,
+    has_reason_cue,
+    classify_reason_gpt,
+)
 from src.models.data_models import CallState, SimpleCallRequest
 import src.services.telnyx.client as telnyx_client
 from src.api.v1.orchestrate import make_orchestrate_router
@@ -201,6 +206,70 @@ def _enter_denial_rep_phase(call_state):
     )
 
 
+# GPT reason-classification fallback fires at most this many times per call
+# (once at pivot if rules missed, once more in rep phase on a reason cue).
+_MAX_REASON_GPT_ATTEMPTS = 2
+
+
+def _schedule_reason_classification(call_state, transcript_tail: str):
+    """Fire the GPT reason-classification as a BACKGROUND task — never in the
+    speech loop. The task writes denial_reason_key/verbatim onto CallState;
+    the next turn's re-rendered prompt picks it up. Cancelled in cleanup
+    step 0 via CallState.denial_reason_task."""
+    attempts = getattr(call_state, "denial_gpt_attempts", 0)
+    if attempts >= _MAX_REASON_GPT_ATTEMPTS:
+        return
+    prior = getattr(call_state, "denial_reason_task", None)
+    if prior is not None and not prior.done():
+        return  # one in flight at a time
+    call_state.denial_gpt_attempts = attempts + 1
+
+    async def _run():
+        try:
+            key, verbatim = await classify_reason_gpt(transcript_tail)
+            if key and getattr(call_state, "denial_reason_key", None) is None:
+                call_state.denial_reason_key = key
+                if verbatim:
+                    call_state.denial_reason_verbatim = verbatim
+                logger.info(f"🧭 Denial reason set by GPT fallback: {key}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Reason-classification task failed (ignored): {e}")
+
+    call_state.denial_reason_task = asyncio.create_task(_run())
+
+
+def _update_denial_reason(call_state, payer_text: str):
+    """Per-utterance reason maintenance (free rules + gated GPT scheduling).
+
+    - A rule hit on a DIFFERENT reason than currently held overwrites it
+      (the rep's explanation beats the IVR readout) with a log line.
+    - If still unclassified in rep phase and the utterance carries a
+      "reason cue" ("denied because..."), schedule the GPT fallback over
+      the recent denial-phase conversation.
+    """
+    hit = match_reason_rules(payer_text)
+    current = getattr(call_state, "denial_reason_key", None)
+    if hit is not None and hit.key != current:
+        if current is not None:
+            logger.info(f"🧭 Denial reason OVERWRITTEN: {current} → {hit.key} (rep contradicted earlier signal)")
+        else:
+            logger.info(f"🧭 Denial reason matched by rules: {hit.key}")
+        call_state.denial_reason_key = hit.key
+        call_state.denial_reason_verbatim = payer_text.strip()[:300]
+        return
+
+    if (
+        current is None
+        and call_state.phase == "denial_rep"
+        and has_reason_cue(payer_text)
+    ):
+        # Build a small tail of the denial-phase conversation for GPT.
+        tail = _format_denial_history(call_state)
+        _schedule_reason_classification(call_state, f"{tail}\nRep: {payer_text}")
+
+
 def _format_denial_history(call_state) -> str:
     """Render the denial-phase conversation history for the rep prompt.
 
@@ -291,6 +360,19 @@ async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
         "representative instead of hanging up"
     )
 
+    # Reason classification, tier 1: free rules over the full claim readout
+    # (the IVR often names the reason, e.g. "documentation submitted does
+    # not meet the code criteria"). Tier 2: GPT fallback in the background
+    # if the rules found nothing — result lands before the rep picks up.
+    if getattr(call_state, "denial_reason_key", None) is None:
+        hit = match_reason_rules(claims_text)
+        if hit is not None:
+            call_state.denial_reason_key = hit.key
+            call_state.denial_reason_verbatim = claims_text.strip()[-300:]
+            logger.info(f"🧭 Denial reason from claim readout (rules): {hit.key}")
+        else:
+            _schedule_reason_classification(call_state, claims_text)
+
     # Proactively ask for a representative — the claims menu is awaiting a
     # command right now. If TTS fails, the denial-IVR prompt drives the next
     # turn anyway.
@@ -309,6 +391,10 @@ async def _handle_denial_speech(text: str, call_state, call_control_id: str):
     # IVR announced the transfer → flip to rep phase before template selection.
     if call_state.phase == "denial_ivr" and is_transfer_signal(text):
         _enter_denial_rep_phase(call_state)
+
+    # Maintain the denial-reason classification from this payer utterance
+    # (free rules; GPT fallback scheduled in the background when cued).
+    _update_denial_reason(call_state, text)
 
     fmt = build_denial_format_kwargs(call_state)
 

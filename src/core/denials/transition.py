@@ -22,14 +22,23 @@ logger = logging.getLogger(__name__)
 
 # Phrases that signal the IVR is about to (or has just) transferred us to a
 # live representative. Matched case-insensitively as substrings.
+# Several of these come verbatim from real Humana call transcripts —
+# e.g. "Okay, you will be transferred in a moment. ... I'm transferring you
+# now." (2026-07 docs-required denial call).
 _TRANSFER_PHRASES = (
     "transferring you now",
     "i am transferring you",
     "im transferring you",          # STT sometimes drops the apostrophe
     "transferring your call",
+    "transferred in a moment",      # real Humana phrasing
+    "will be transferred",
+    "being transferred",
+    "transfer you now",
     "transfer you to a representative",
     "connect you with a representative",
     "connect you to a representative",
+    "connecting you now",
+    "putting you through",
     "estimated wait time",
     "we are sorry to keep you waiting",
     "appreciate your patience",

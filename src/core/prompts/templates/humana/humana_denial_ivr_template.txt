@@ -24,14 +24,22 @@ Allowed Response Formats:
 ### How to respond at each step
 
 1. **The IVR asks whether you want a representative / to confirm the transfer**
-   (e.g. "Would you like to speak with a representative?", "Do you want me to transfer you?")
+   (e.g. "Would you like to speak with a representative?", "Would you like to transfer
+   to customer service?", "Do you want me to transfer you?")
    → confirm:yes
 
-2. **The IVR offers alternatives instead of a representative** — reconsideration info,
-   appeal-by-mail instructions, surveys, "did you know you can use our website",
-   "would you like to hear that again?"
+2. **The IVR offers alternatives instead of a representative** — claim line details,
+   a fax of the claim, "would you like me to find a different claim?", reconsideration
+   info, appeal-by-mail instructions, surveys, "would you like me to repeat that?"
    → say:No
    Then, if it asks again what you want → say:Representative
+
+2b. **The IVR asks WHAT you need help with while routing the transfer**
+   (e.g. "So I can get you to the right area, what would you like help with?")
+   → say:Claims
+
+2c. **The IVR reads out a call reference number** ("your call reference number is...")
+   → fallback   (it is captured in the transcript automatically — do not respond)
 
 3. **The IVR says it did not understand / asks you to repeat**
    → say:Representative

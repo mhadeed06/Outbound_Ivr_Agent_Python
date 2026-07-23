@@ -11,9 +11,15 @@ Per-turn context building for the denial follow-up prompts.
 
 - `render_denial_context()` — renders the {denial_context_block} injected
   into the rep template every turn: the denial reason as understood so far
-  plus the question checklist. Until the 13-reason registry lands (next
-  phase), this always renders the GENERIC question set — ICN + cause +
-  corrective action + deadline are safe and useful for every denial.
+  plus the question checklist with [OPEN]/[ASKED]/[ANSWERED] markers.
+  Questions come from the 13-reason registry (denial_reasons.py) once the
+  reason is classified; the GENERIC set before that; and a graceful
+  wrap-up block when the reason is OUT OF SCOPE.
+
+  The ASKED/ANSWERED markers are recomputed from the conversation history
+  on every render (stateless — no mutation to race on). They are ADVISORY:
+  the history block in the prompt remains the ground truth GPT reasons
+  over; the markers just sharpen the goal-check gate.
 
 Templates are lru_cache'd by the loader, so ALL dynamic content must flow
 through .format() placeholders — never edit template text at runtime.
@@ -21,17 +27,15 @@ through .format() placeholders — never edit template text at runtime.
 import logging
 import os
 
-logger = logging.getLogger(__name__)
-
-
-# Safe-for-every-denial question set, used until the reason is classified
-# (and permanently for reasons outside the supported registry).
-GENERIC_QUESTIONS = (
-    "The ICN number (claim control number) for the denied claim",
-    "What specifically caused the denial",
-    "What the corrective action is, and where to send it (fax number, portal, or address)",
-    "The time limit for resubmission or appeal from the date of the denial",
+from src.core.denials.denial_reasons import (
+    CLOSING_QUESTIONS,
+    GENERIC_QUESTIONS,
+    OUT_OF_SCOPE_KEY,
+    UNIVERSAL_QUESTIONS,
+    get_reason,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def build_denial_format_kwargs(call_state) -> dict:
@@ -52,27 +56,91 @@ def build_denial_format_kwargs(call_state) -> dict:
     }
 
 
-def render_denial_context(call_state) -> str:
-    """Render the per-turn {denial_context_block} for the rep template.
+def _denial_phase_history(call_state):
+    """(role, text) pairs of the denial-phase conversation, oldest first.
+    role is "bot" (our say-lines) or "rep" (payer-side utterances)."""
+    start = getattr(call_state, "denial_history_start", 0)
+    entries = (getattr(call_state, "conversation_history", None) or [])[start:]
+    out = []
+    for e in entries:
+        heard = (e.get("transcript") or "").strip()
+        replied = (e.get("gpt_result") or "").strip()
+        if heard:
+            out.append(("rep", heard.lower()))
+        if replied:
+            low = replied.lower()
+            if low.startswith("say:"):
+                out.append(("bot", low[4:].strip()))
+    return out
 
-    Phase 1: reason display + generic checklist. The 13-reason registry
-    (denial_reasons.py) will swap in reason-specific questions here without
-    touching the template.
+
+def _question_status(question, history) -> str:
+    """OPEN / ASKED / ANSWERED for one question, from the denial-phase history.
+
+    ASKED    → one of our say-lines contains a question keyword.
+    ANSWERED → a substantive rep utterance (>= 15 chars) came after that ask.
     """
+    if not question.keywords:
+        return "OPEN"
+    asked_at = None
+    for i, (role, text) in enumerate(history):
+        if role == "bot" and any(kw in text for kw in question.keywords):
+            asked_at = i
+            break
+    if asked_at is None:
+        return "OPEN"
+    for role, text in history[asked_at + 1:]:
+        if role == "rep" and len(text) >= 15:
+            return "ANSWERED"
+    return "ASKED"
+
+
+def render_denial_context(call_state) -> str:
+    """Render the per-turn {denial_context_block} for the rep template."""
     reason_key = getattr(call_state, "denial_reason_key", None)
     verbatim = getattr(call_state, "denial_reason_verbatim", None)
 
-    if verbatim:
-        reason_line = f'Denial reason (as understood so far): "{verbatim}"'
-    elif reason_key:
-        reason_line = f"Denial reason (as understood so far): {reason_key}"
-    else:
-        reason_line = (
-            "Denial reason: NOT YET IDENTIFIED — your first priority is to "
-            "ask the representative why the claim was denied."
+    # ── Path C: reason outside the supported registry — graceful wrap-up ──
+    if reason_key == OUT_OF_SCOPE_KEY:
+        return (
+            f'Denial reason (as stated): "{verbatim or "unrecognized"}"\n'
+            "\n"
+            "⚠️ This denial reason is OUTSIDE the scope this agent handles. Do NOT work\n"
+            "through a detailed question list. Instead, wrap up gracefully:\n"
+            "1. Confirm the denial reason back to the rep in one sentence so the\n"
+            "   transcript captures it accurately.\n"
+            "2. Get the ICN number (claim control number) if you don't have it yet.\n"
+            "3. Get the call reference number.\n"
+            "4. Thank the representative and end the call politely.\n"
+            "The billing team will handle this denial manually using the captured reason."
         )
 
-    lines = [reason_line, "", "Questions to work through (ask only what's still open, one at a time):"]
-    for i, q in enumerate(GENERIC_QUESTIONS, 1):
-        lines.append(f"{i}. [OPEN] {q}")
+    reason = get_reason(reason_key)
+    history = _denial_phase_history(call_state)
+
+    if reason is not None:
+        reason_line = (
+            f"Denial reason (as understood so far): {reason.display_name} "
+            f"[{reason.group_code} {'/'.join(reason.carc_codes)}]"
+        )
+        middle = reason.questions
+    else:
+        reason_line = (
+            "Denial reason: NOT YET IDENTIFIED — your first priority is to ask the "
+            "representative why the claim was denied."
+        )
+        middle = GENERIC_QUESTIONS
+
+    questions = tuple(UNIVERSAL_QUESTIONS) + tuple(middle) + tuple(CLOSING_QUESTIONS)
+
+    lines = [reason_line, "", "Questions to work through (ask only what's still open, ONE per turn):"]
+    for i, q in enumerate(questions, 1):
+        status = _question_status(q, history)
+        lines.append(f"{i}. [{status}] {q.text}")
+    lines.append("")
+    lines.append(
+        "A question marked [ANSWERED] is done — do not re-ask it. [ASKED] means you "
+        "asked but may not have a usable answer yet — check the conversation history. "
+        "The history below is the ground truth; these markers are hints."
+    )
     return "\n".join(lines)

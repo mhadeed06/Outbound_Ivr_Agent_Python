@@ -103,6 +103,8 @@ class CallState:
     denial_checklist: Optional[dict] = None
     # Background GPT reason-classification task — cancelled in cleanup step 0.
     denial_reason_task: Optional[object] = None
+    # How many GPT reason-classification attempts have fired (hard cap 2).
+    denial_gpt_attempts: int = 0
     # Index into conversation_history where the denial flow began — the rep
     # prompt's history block only shows entries from this point on (earlier
     # claim-status menu turns would be noise to the rep conversation).
