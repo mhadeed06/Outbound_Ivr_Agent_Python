@@ -59,19 +59,15 @@ CLOSING_QUESTIONS: Tuple[DenialQuestion, ...] = (
     ),
 )
 
-# Used while the reason is unclassified (and as the safe middle ground).
+# Used ONLY while the reason is unclassified. Deliberately minimal: the
+# working questions (corrective action, submission target, deadlines, etc.)
+# are asked ONLY after the reason is classified into one of the 13 supported
+# entries — each entry carries its own question set. Unknown reason → first
+# discover it; out-of-scope reason → wrap up without working questions.
 GENERIC_QUESTIONS: Tuple[DenialQuestion, ...] = (
     DenialQuestion(
-        "What specifically caused the denial",
+        "What specifically caused the denial (get the reason in the rep's own words)",
         ("why", "reason", "caused the denial"),
-    ),
-    DenialQuestion(
-        "What the corrective action is, and where to send it (specific fax number, portal, or address)",
-        ("fax", "where do we submit", "how to submit", "corrective"),
-    ),
-    DenialQuestion(
-        "The time limit for resubmission or appeal from the date of the denial",
-        ("time limit", "deadline", "how long"),
     ),
 )
 
