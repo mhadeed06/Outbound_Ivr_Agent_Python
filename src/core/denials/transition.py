@@ -44,6 +44,13 @@ _TRANSFER_PHRASES = (
     "appreciate your patience",
     "please hold while",
     "please stay on the line",
+    # Cigna reaches a human via a "customer service advocate" — same transfer
+    # intent, different noun. (Refine with real Cigna transcripts.)
+    "connect you to an advocate",
+    "connect you with an advocate",
+    "transfer you to an advocate",
+    "connect you to customer service",
+    "transfer you to customer service",
 )
 
 

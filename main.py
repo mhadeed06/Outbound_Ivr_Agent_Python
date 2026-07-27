@@ -140,6 +140,35 @@ def append_conversation_step(call_state, transcript: str, gpt_result: str):
     })
 
 
+_CLAIM_HISTORY_MAX_TURNS = 3
+
+def _format_claim_history(call_state) -> str:
+    """Last few IVR↔bot turns for the claim-status prompt, so GPT has context
+    for back-references like "can you repeat that?" (otherwise it has no idea
+    what it just said). Kept SHORT — the IVR flow is fast and menu-driven, so a
+    long history would bloat the prompt and risk re-driving old phases. Only the
+    {transcript, gpt_result} entries are shown (assistant-content entries just
+    duplicate the gpt_result)."""
+    if not call_state:
+        return "(no prior turns yet)"
+    turns = []
+    for e in (call_state.conversation_history or []):
+        t = (e.get("transcript") or "").strip()
+        g = (e.get("gpt_result") or "").strip()
+        if t or g:
+            turns.append((t, g))
+    turns = turns[-_CLAIM_HISTORY_MAX_TURNS:]
+    if not turns:
+        return "(no prior turns yet)"
+    lines = []
+    for t, g in turns:
+        if t:
+            lines.append(f'IVR said: "{t}"')
+        if g:
+            lines.append(f'You responded: {g}')
+    return "\n".join(lines)
+
+
 def _is_gpt_claim_mode_signal(response: str) -> bool:
     """Detect the 'claim_mode' safety-net signal from GPT — used as a fallback
     when is_claim_start() missed the IVR phrasing. Strict-equality on the
@@ -474,11 +503,13 @@ async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
             logger.info(f"🧭 Provisional reason from claim readout (keywords, GPT will confirm): {hit.key}")
         _schedule_reason_classification(call_state, claims_text)
 
-    # Proactively ask for a representative — the claims menu is awaiting a
-    # command right now. If TTS fails, the denial-IVR prompt drives the next
-    # turn anyway.
+    # Proactively ask for a live human — the claims menu is awaiting a command
+    # right now. The phrase is payer-specific ("Representative" for Humana,
+    # "customer service advocate" for Cigna). If TTS fails, the denial-IVR
+    # prompt drives the next turn anyway.
     try:
-        await speak_with_azure("Representative", call_id)
+        request_phrase = config_manager.get_denial_ivr_request_phrase()
+        await speak_with_azure(request_phrase, call_id)
     except Exception as e:
         logger.warning(f"Pivot TTS failed (denial-IVR prompt will drive next turn): {e}")
 
@@ -642,7 +673,21 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     # and stored on CallState. Required fields were validated there, so by this
     # point visit_data has everything the prompt template needs.
     visit_data = (call_state.visit_data or {}) if call_state else {}
-    prompt = prompt_template.format(transcript=transcript, **visit_data)
+    # Caller (agent) identity — the bot is the CALLER from the provider's office,
+    # NOT the patient. Used only by prompts that ask "who am I talking to" (e.g.
+    # Cigna: "say and spell your first and last name"). Env-configurable; prompts
+    # that don't reference these placeholders simply ignore the extra keys.
+    fmt = {
+        **visit_data,
+        "transcript": transcript,
+        "agent_persona_name": os.getenv("DENIAL_AGENT_PERSONA_NAME", "Miranda"),
+        "agent_persona_last_name": os.getenv("DENIAL_AGENT_PERSONA_LAST_NAME", "Bell"),
+        # Short recent-turn history so the prompt has context for "repeat that"
+        # and other back-references. Templates that don't use {conversation_history}
+        # simply ignore this key.
+        "conversation_history": _format_claim_history(call_state),
+    }
+    prompt = prompt_template.format(**fmt)
 
     t0 = time.perf_counter()
     response = await _call_gpt_api(prompt)

@@ -55,6 +55,10 @@ def build_denial_format_kwargs(call_state) -> dict:
     # NPIs: {npi} is the provider's individual NPI (also used in identification);
     # group_npi is the practice/billing NPI. Reps may ask for either.
     group_npi = visit_data.get("group_npi") or ""
+    # provider_address — Cigna advocates ask for it during verification. Optional
+    # for other payers (their templates don't reference {provider_address}, so
+    # this extra key is harmless there — str.format ignores unused kwargs).
+    provider_address = visit_data.get("provider_address") or os.getenv("DENIAL_TEST_PROVIDER_ADDRESS", "")
     return {
         **visit_data,
         "billed_amount": visit_data.get("billed_amount")
@@ -64,8 +68,12 @@ def build_denial_format_kwargs(call_state) -> dict:
         # saying "the practice is not provided".
         "practice_name": practice_name or "__UNKNOWN__",
         "group_npi": group_npi or "__UNKNOWN__",
-        "agent_persona_name": os.getenv("DENIAL_AGENT_PERSONA_NAME", "Kevin"),
-        "callback_number": os.getenv("DENIAL_CALLBACK_NUMBER", "469-581-2969"),
+        "provider_address": provider_address or "__UNKNOWN__",
+        # Defaults are the real values, so these work WITHOUT any env vars set.
+        # (env can still override per-deployment, but is not required.)
+        "agent_persona_name": os.getenv("DENIAL_AGENT_PERSONA_NAME", "Miranda"),
+        "agent_persona_last_name": os.getenv("DENIAL_AGENT_PERSONA_LAST_NAME", "Bell"),
+        "callback_number": os.getenv("DENIAL_CALLBACK_NUMBER", "469-581-2936"),
     }
 
 
@@ -197,7 +205,7 @@ def render_denial_context(call_state) -> str:
         "specific date). A RELATED remark is NOT the value:"
     )
     lines.append(
-        "   • \"Humana is secondary\" / \"there is a primary on file\" CONFIRMS coordination "
+        "   • \"we are secondary\" / \"there is a primary on file\" CONFIRMS coordination "
         "of benefits but is NOT the primary carrier's name — you still need to ask: "
         "\"Then who is the primary carrier on file?\""
     )

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 import re
 import time
 import httpx
@@ -33,7 +34,14 @@ def _is_code_token(s: str) -> bool:
     return has_letters or digit_ratio >= NUMERIC_HEAVY_RATIO
 
 
-voice_name = "en-US-JennyNeural"
+# TTS voice — env-configurable so you can A/B or revert without a code change.
+# Ava (multilingual) is a newer, more natural conversational voice than the
+# older Jenny. To go back: set AZURE_TTS_VOICE=en-US-JennyNeural.
+voice_name = os.getenv("AZURE_TTS_VOICE", "en-US-AvaMultilingualNeural")
+# Slight speed-up on normal speech makes the cadence conversational instead of
+# the flat "announcer" default. Applied ONLY to prose — dates and spelled-out
+# codes/IDs stay at default speed for clarity. Set AZURE_TTS_RATE=+0% to disable.
+SPEECH_RATE = os.getenv("AZURE_TTS_RATE", "+6%")
 
 def _build_ssml_for(text: str) -> str:
     clean = " ".join(text.split())
@@ -67,11 +75,12 @@ def _build_ssml_for(text: str) -> str:
 </speak>
 """.strip()
 
-    # 3) Everything else → normal speech
+    # 3) Everything else → normal speech (light rate bump for a conversational,
+    #    less "announcer" cadence)
     return f"""
 <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
   <voice xml:lang="en-US" xml:gender="Female" name="{voice_name}">
-    {clean}
+    <prosody rate="{SPEECH_RATE}">{clean}</prosody>
   </voice>
 </speak>
 """.strip()

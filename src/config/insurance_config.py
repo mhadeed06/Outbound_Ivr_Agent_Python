@@ -39,6 +39,10 @@ class InsuranceConfig:
     # rep hold queues run long, so the original claim-status timer would
     # cut the call mid-hold. None → fall back to auto_hangup_seconds.
     denial_auto_hangup_seconds: Optional[int] = None
+    # Phrase spoken at the pivot to request a live human. Humana reaches a rep
+    # by saying "Representative"; Cigna reaches one via "customer service
+    # advocate". Payer-specific — default keeps Humana/others unchanged.
+    denial_ivr_request_phrase: str = "Representative"
 
 # All insurance configurations
 INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
@@ -54,6 +58,16 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         claim_segmentation_silence_ms=1700,
         auto_hangup_seconds=900,
         dedupe_chunks=True,
+        # In-call denial pivot. Cigna's verbose IVR usually reads the denial
+        # reason aloud, so the reason is often classified from the readout
+        # before the advocate even picks up. Reach a human via "customer
+        # service advocate". Rep-phase timings mirror Humana (humans pause
+        # more than the IVR menu).
+        supports_denial_inquiry=True,
+        denial_rep_debounce_seconds=1.5,
+        denial_rep_segmentation_silence_ms=1600,
+        denial_auto_hangup_seconds=1800,
+        denial_ivr_request_phrase="customer service advocate",
     ),
 
     "HUMANA": InsuranceConfig(

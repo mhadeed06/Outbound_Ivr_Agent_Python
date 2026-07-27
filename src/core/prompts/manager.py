@@ -30,6 +30,8 @@ def get_main_prompt_template() -> str:
 _DENIAL_PROMPT_FILES = {
     ("HUMANA", "ivr"): "humana/humana_denial_ivr_template",
     ("HUMANA", "representative"): "humana/humana_denial_rep_template",
+    ("CIGNA", "ivr"): "cigna/cigna_denial_ivr_template",
+    ("CIGNA", "representative"): "cigna/cigna_denial_rep_template",
 }
 
 

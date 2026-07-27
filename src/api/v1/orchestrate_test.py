@@ -8,7 +8,8 @@ production /v1/Billing-Agent/Call:
 
   - visit_data comes INLINE in the request body (no Auth API, no Clinical API)
   - routed by insurance name (no payer_id lookup)
-  - no JWT (the endpoint is disabled unless ENABLE_TEST_CALL_ENDPOINT=true)
+  - same JWT auth as production (Bearer token via verify_token) — send an
+    Authorization: Bearer <token> header, exactly like /v1/Billing-Agent/Call
   - no Billing-Agent/Log row (ref_no=None)
   - CallState.is_test=True → the post-call pipeline runs the real outcome
     classification but LOGS the would-be writes instead of touching any
@@ -33,12 +34,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Dict, Callable
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from src.auth.jwt_auth import verify_token
 from src.config.insurance_config import (
     INSURANCE_CONFIGS,
     config_manager,
@@ -50,10 +51,6 @@ from src.models.data_models import CallState
 import src.services.telnyx.client as telnyx_client
 
 logger = logging.getLogger(__name__)
-
-
-def _enabled() -> bool:
-    return os.getenv("ENABLE_TEST_CALL_ENDPOINT", "").strip().lower() in ("1", "true", "yes")
 
 
 def _respond(succeeded: bool, message: str, http_status: int = 200) -> JSONResponse:
@@ -75,11 +72,11 @@ def make_orchestrate_test_router(
     router = APIRouter()
 
     @router.post("/v1/Billing-Agent/Call/Test")
-    async def create_test_call(request: Request, wait_for_initiated_ms: int = 10000):
-        if not _enabled():
-            # Indistinguishable from a nonexistent route when disabled.
-            return _respond(False, "Not found", http_status=404)
-
+    async def create_test_call(
+        request: Request,
+        user: dict = Depends(verify_token),   # same JWT auth as /v1/Billing-Agent/Call
+        wait_for_initiated_ms: int = 10000,
+    ):
         try:
             try:
                 incoming = await request.json()
