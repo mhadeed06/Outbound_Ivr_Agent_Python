@@ -70,8 +70,11 @@ INSURANCE_CONFIGS: Dict[str, InsuranceConfig] = {
         # First payer wired for the in-call denial pivot (values validated
         # on the old denial-inquiry demo calls).
         supports_denial_inquiry=True,
-        denial_rep_debounce_seconds=0.8,
-        denial_rep_segmentation_silence_ms=800,
+        denial_rep_debounce_seconds=2,
+        # Longer STT segmentation so a rep who pauses mid-sentence isn't cut
+        # into fragments — captures fuller sentences before the bot responds,
+        # so it stops interrupting and stops double-replying to split chunks.
+        denial_rep_segmentation_silence_ms=1600,
         denial_auto_hangup_seconds=1800,
     ),
 

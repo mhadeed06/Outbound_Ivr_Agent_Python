@@ -18,6 +18,15 @@ class SimpleCallRequest(BaseModel):
     wait_for_initiated_ms: int | None = 2000
 
 
+# Cap on CallState.conversation_history length. Growth is turn-based (not per
+# audio frame), so a normal call stays far under this; only a pathologically
+# long hold call trims its OLDEST turns. Readers only ever use the tail or the
+# from-pivot slice, so trimming the front is behavior-neutral — add_history
+# shifts denial_history_start to keep its index valid. (full_transcript is NOT
+# capped: it's the transcript uploaded to the billing team and must stay whole.)
+_MAX_CONVERSATION_HISTORY = 400
+
+
 @dataclass
 class CallState:
     """State management for active calls"""
@@ -106,6 +115,10 @@ class CallState:
     # per-question checklist {index: "OPEN"|"ASKED"|"ANSWERED"}.
     denial_reason_key: Optional[str] = None
     denial_reason_verbatim: Optional[str] = None
+    # True while the reason is only a keyword GUESS that GPT hasn't confirmed
+    # yet. GPT (the authoritative classifier) overrides a provisional guess;
+    # once GPT confirms, this flips False and the reason sticks.
+    denial_reason_provisional: bool = False
     denial_checklist: Optional[dict] = None
     # Background GPT reason-classification task — cancelled in cleanup step 0.
     denial_reason_task: Optional[object] = None
@@ -116,9 +129,27 @@ class CallState:
     # claim-status menu turns would be noise to the rep conversation).
     denial_history_start: int = 0
 
+    # Hold-silence watchdog (rep phase): if the line goes quiet for a long
+    # stretch (rep put us on hold and wandered off), the bot proactively says
+    # "Hello, are you still there?" instead of sitting mute.
+    last_activity_ts: Optional[float] = None
+    hold_nudge_count: int = 0
+    hold_watchdog_task: Optional[object] = None
+
     def __post_init__(self):
         if self.debounce_seconds is None:
             self.debounce_seconds = config_manager.get_debounce_seconds()
 
         if self.segmentation_silence_ms is None:
             self.segmentation_silence_ms = config_manager.get_segmentation_silence_ms()
+
+    def add_history(self, entry: dict) -> None:
+        """Append to conversation_history with a hard length cap so a very long
+        call can't grow this list without bound. If we trim the oldest entries,
+        shift denial_history_start by the same amount so it still points at the
+        first post-pivot turn (it's an absolute index into this list)."""
+        self.conversation_history.append(entry)
+        overflow = len(self.conversation_history) - _MAX_CONVERSATION_HISTORY
+        if overflow > 0:
+            del self.conversation_history[:overflow]
+            self.denial_history_start = max(0, self.denial_history_start - overflow)

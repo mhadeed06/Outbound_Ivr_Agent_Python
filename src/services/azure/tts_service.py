@@ -95,7 +95,7 @@ async def speak_with_azure(
     
     try:
         if call_state is not None:
-            call_state.conversation_history.append({"role": "assistant", "content": text})
+            call_state.add_history({"role": "assistant", "content": text})
         append_agent(call_state, text)
     except Exception as e:
         logger.error(f"Error appending to conversation history: {e}")

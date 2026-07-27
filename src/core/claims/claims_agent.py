@@ -122,6 +122,14 @@ async def end_session(call_id: str, *, already_locked: bool = False, skip_hangup
         async with _locks.setdefault(call_id, asyncio.Lock()):
             await _finish()
 
+    # Release per-call state so these module-level dicts don't grow one entry
+    # per call forever (memory leak). Safe here: end_session is the single
+    # idempotent teardown (the guard at the top makes a second call a no-op),
+    # and any late claims event tolerates a missing session (is_active → False).
+    # The _locks pop runs AFTER the `async with` above has released the lock.
+    _sessions.pop(call_id, None)
+    _locks.pop(call_id, None)
+
 
 def get_claims(call_id: str) -> List[str]:
     s = _sessions.get(call_id) or {}
@@ -150,7 +158,7 @@ def _append_conversation_step(call_id: str, transcript: str, gpt_result: str):
     if not transcript and not gpt_result:
         return
 
-    call_state.conversation_history.append({
+    call_state.add_history({
         "transcript": transcript,
         "gpt_result": gpt_result
     })

@@ -59,7 +59,7 @@ async def ensure_call_cleanup(
         # task and the auto-hangup watchdog. Never cancel the task we are
         # currently running inside (auto_hangup itself calls this cleanup —
         # cancelling it here would kill the cleanup mid-flight).
-        for task_attr in ("debounce_task", "denial_reason_task", "auto_hangup_task"):
+        for task_attr in ("debounce_task", "denial_reason_task", "auto_hangup_task", "hold_watchdog_task"):
             try:
                 task = getattr(cs, task_attr, None)
                 if (

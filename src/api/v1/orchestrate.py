@@ -231,11 +231,19 @@ def make_orchestrate_router(
                 denial_follow_up=denial_follow_up,
             )
 
-            auto_hangup_seconds = config_manager.get_auto_hangup_seconds()
             # Keep a handle to the watchdog so the denial pivot can cancel the
-            # claim-status timer and re-arm a longer one at pivot time.
-            watchdog = asyncio.create_task(auto_hangup_fn(call_control_id, delay_seconds=auto_hangup_seconds))  # type: ignore[arg-type]
-            active_calls[call_control_id].auto_hangup_task = watchdog
+            # claim-status timer and re-arm a longer one at pivot time. If arming
+            # the watchdog fails here, the CallState we just inserted would have
+            # no websocket, no webhook, and no timer → it could sit in
+            # active_calls forever. Pop it on failure so an error path can't
+            # strand a call (memory leak).
+            try:
+                auto_hangup_seconds = config_manager.get_auto_hangup_seconds()
+                watchdog = asyncio.create_task(auto_hangup_fn(call_control_id, delay_seconds=auto_hangup_seconds))  # type: ignore[arg-type]
+                active_calls[call_control_id].auto_hangup_task = watchdog
+            except Exception:
+                active_calls.pop(call_control_id, None)
+                raise
 
             # ── race-proof wait for 'call.initiated' ────────────────────────
             status = "queued"

@@ -40,13 +40,15 @@ class DenialReason:
     questions: Tuple[DenialQuestion, ...]
 
 
-# Asked for EVERY denial, before the reason-specific questions.
-# Note: the ICN (claim number) is often already read out by the IVR during
-# the claim readout earlier in the call — confirm it instead of re-asking.
+# Needed for EVERY denial, but LOWER priority than the reason-specific
+# questions — the claim/ICN number was usually already read out by the IVR
+# during the claim readout, so it's typically already captured. Only ask the
+# rep for it if you don't already have it. Lead with the reason-specific
+# questions (the actual point of the call), not this.
 UNIVERSAL_QUESTIONS: Tuple[DenialQuestion, ...] = (
     DenialQuestion(
-        "The ICN number (claim control number) for the denied claim — if the IVR "
-        "already read a claim number earlier in the call, confirm that one",
+        "The ICN / claim control number — usually ALREADY captured from the earlier "
+        "claim readout, so ask the rep only if you don't already have it",
         ("icn", "claim number", "control number"),
     ),
 )
@@ -162,14 +164,19 @@ DENIAL_REASONS: Dict[str, DenialReason] = {
         display_name="Medical Necessity",
         group_code="CO",
         carc_codes=("50", "151"),
+        # NOTE: bare "medical necessity" / "medically necessary" were REMOVED —
+        # they appear in every payer's generic disclaimer ("subject to policy
+        # guidelines, medical necessity, and member eligibility") and caused
+        # false matches. Only ACTUAL medical-necessity denial phrasings here.
         trigger_keywords=(
-            "medical necessity",
             "not medically necessary",
-            "medically necessary",
             "not deemed a medical necessity",
             "does not support this many",
-            "frequency of service",
-            "level of service",
+            "does not support the frequency",
+            "does not support this level",
+            "does not support the level of service",
+            "medical records to establish",
+            "records to support the medical necessity",
         ),
         questions=(
             DenialQuestion(
@@ -274,6 +281,16 @@ DENIAL_REASONS: Dict[str, DenialReason] = {
             "other insurance",
             "another insurance is primary",
             "primary insurance on file",
+            # Real rep phrasings (2026-07): Humana as secondary needs the
+            # primary carrier's EOB before it will consider the claim.
+            "primary insurance carrier",
+            "primary insurance",
+            "primary carrier",
+            "primary payer",
+            "explanation of benefits from",
+            "eob from the primary",
+            "members primary",
+            "member's primary",
             "c o b",  # STT sometimes spells the acronym out
         ),
         questions=(
@@ -295,6 +312,12 @@ DENIAL_REASONS: Dict[str, DenialReason] = {
             "not a covered benefit",
             "excluded from the plan",
             "benefit plan does not cover",
+            # Real Humana rep phrasing for a plan/Medicare exclusion, e.g.
+            # "not allowed due to Medicare exclusion of services for flat foot".
+            "medicare exclusion",
+            "exclusion of services",
+            "excluded service",
+            "not a covered service",
         ),
         questions=(
             DenialQuestion(

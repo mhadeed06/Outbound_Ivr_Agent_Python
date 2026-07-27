@@ -64,6 +64,7 @@ def make_stream_router(
             pending_finals=[],                                  # accumulate final STT chunks here
             debounce_task=None,                                 # the timer task we cancel/restart
             debounce_time=DEFAULT_DEBOUNCE_SECONDS,             # overwritten from call_state on 'start'
+            last_partial_len=0,                                 # for throttling partial-log spam
         )
 
         async def _process_after_quiet():
@@ -129,7 +130,14 @@ def make_stream_router(
 
         # ───────── Azure STT callbacks ─────────
         async def on_partial(text: str):
-            logger.info(f"[STT][partial] {text[:60]!r}")
+            # Throttle partial logging: only log when the transcript grows by a
+            # meaningful chunk (~4 words) or a new/shorter utterance begins. This
+            # kills the per-token spam and the frozen-partial repeats that flooded
+            # the logs. Finals are always logged in full by _handle_recognized.
+            n = len(text)
+            if n < state.last_partial_len or n >= state.last_partial_len + 25:
+                logger.info(f"[STT][partial] {text[:80]!r}")
+                state.last_partial_len = n
 
             if call_state:
                 desired = getattr(call_state, "debounce_seconds", DEFAULT_DEBOUNCE_SECONDS)
@@ -144,6 +152,8 @@ def make_stream_router(
         async def on_final(text: str):
             #logger.info(f"📥 on_final called with: '{text[:50]}...'")
             #logger.info(f"[STT][final] {text[:60]!r}")
+
+            state.last_partial_len = 0  # reset partial-log throttle for the next utterance
 
             text = text.strip()
             if not text:
@@ -257,7 +267,7 @@ def make_stream_router(
                         else:
                             call_state.azure_stt_session.feed_audio(pcm)
                             fed_frames += 1
-                            if fed_frames <= 3 or fed_frames % 100 == 0:
+                            if fed_frames <= 3 or fed_frames % 500 == 0:
                                 logger.info(f"[MEDIA] fed_frames={fed_frames}")
                     else:
                         # either track != inbound or no call_state

@@ -134,7 +134,7 @@ def append_conversation_step(call_state, transcript: str, gpt_result: str):
     if not transcript and not gpt_result:
         return
 
-    call_state.conversation_history.append({
+    call_state.add_history({
         "transcript": transcript,
         "gpt_result": gpt_result
     })
@@ -190,6 +190,57 @@ def _is_gpt_rep_mode_signal(response: str) -> bool:
     return compact == "repmode"
 
 
+# Hold-silence watchdog knobs. If the rep line is quiet this long during the
+# rep phase, nudge with a "hello". Capped so a truly dead line isn't nagged
+# forever — auto_hangup ends it.
+_HOLD_SILENCE_S = float(os.getenv("DENIAL_HOLD_SILENCE_S", "180"))
+_HOLD_CHECK_INTERVAL_S = 20.0
+_MAX_HOLD_NUDGES = int(os.getenv("DENIAL_MAX_HOLD_NUDGES", "3"))
+
+
+async def _hold_watchdog(call_control_id: str):
+    """While talking to a live rep, if the line goes silent for a long stretch
+    (rep put us on hold and wandered off), proactively check we're still
+    connected — like a person would — instead of sitting mute forever."""
+    try:
+        while True:
+            await asyncio.sleep(_HOLD_CHECK_INTERVAL_S)
+            cs = active_calls.get(call_control_id)
+            if not cs or getattr(cs, "phase", None) != "denial_rep":
+                return  # call ended or left the rep phase
+            if getattr(cs, "is_tts_active", False):
+                continue  # bot is currently speaking
+            last = getattr(cs, "last_activity_ts", None)
+            if last is None:
+                cs.last_activity_ts = time.time()
+                continue
+            if (time.time() - last) < _HOLD_SILENCE_S:
+                continue
+            if getattr(cs, "hold_nudge_count", 0) >= _MAX_HOLD_NUDGES:
+                continue  # stop nagging a dead line; auto_hangup will end it
+            cs.hold_nudge_count = getattr(cs, "hold_nudge_count", 0) + 1
+            cs.last_activity_ts = time.time()  # reset so we wait again before the next nudge
+            logger.info(
+                f"🔔 Hold-silence nudge #{cs.hold_nudge_count} "
+                f"(quiet ≥ {_HOLD_SILENCE_S:.0f}s)"
+            )
+            try:
+                await speak_with_azure("Hello, are you still there?", call_control_id)
+            except Exception as e:
+                logger.warning(f"Hold nudge TTS failed: {e}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Hold watchdog error: {e}")
+
+
+def _mark_rep_activity(call_state):
+    """Rep spoke (or we're entering rep phase) — reset the hold-silence clock
+    and the nudge count so a responsive rep is never nudged."""
+    call_state.last_activity_ts = time.time()
+    call_state.hold_nudge_count = 0
+
+
 def _enter_denial_rep_phase(call_state):
     """Flip to the live-representative phase: looser speech timings (humans
     pause more than IVR menus) + rep prompt from the next turn on."""
@@ -201,14 +252,28 @@ def _enter_denial_rep_phase(call_state):
     call_state.segmentation_silence_ms = rep_seg
     if getattr(call_state, "azure_stt_session", None):
         call_state.azure_stt_session.update_segmentation_timeout(rep_seg)
+
+    # Start the hold-silence watchdog for this call (once).
+    _mark_rep_activity(call_state)
+    prior = getattr(call_state, "hold_watchdog_task", None)
+    if prior is None or prior.done():
+        call_state.hold_watchdog_task = asyncio.create_task(
+            _hold_watchdog(call_state.call_control_id)
+        )
+
     logger.info(
         f"🧑‍💼 Denial REP phase entered (debounce={rep_debounce}s, segmentation={rep_seg}ms)"
     )
 
 
 # GPT reason-classification fallback fires at most this many times per call
-# (once at pivot if rules missed, once more in rep phase on a reason cue).
-_MAX_REASON_GPT_ATTEMPTS = 2
+# GPT is the PRIMARY reason classifier (keyword rules are only a free fast-path
+# — see _update_denial_reason). It runs in the background off the speech loop,
+# so a few attempts are cheap; capped so it can't run away while unclassified.
+_MAX_REASON_GPT_ATTEMPTS = 5
+# Rep utterances shorter than this (and without an obvious reason cue) are
+# treated as too thin to classify from — we wait for a substantive explanation.
+_MIN_SUBSTANTIVE_LEN = 30
 
 
 def _schedule_reason_classification(call_state, transcript_tail: str):
@@ -227,11 +292,22 @@ def _schedule_reason_classification(call_state, transcript_tail: str):
     async def _run():
         try:
             key, verbatim = await classify_reason_gpt(transcript_tail)
-            if key and getattr(call_state, "denial_reason_key", None) is None:
+            if not key:
+                return
+            current = getattr(call_state, "denial_reason_key", None)
+            provisional = getattr(call_state, "denial_reason_provisional", False)
+            # GPT is AUTHORITATIVE: set the reason when it's unknown, OR override
+            # a provisional keyword guess. A GPT-confirmed reason (non-provisional)
+            # is left alone so we don't thrash turn to turn.
+            if current is None or provisional:
+                if current is not None and current != key:
+                    logger.info(f"🧭 GPT overrode provisional keyword guess: {current} → {key}")
+                else:
+                    logger.info(f"🧭 Denial reason set by GPT: {key}")
                 call_state.denial_reason_key = key
                 if verbatim:
                     call_state.denial_reason_verbatim = verbatim
-                logger.info(f"🧭 Denial reason set by GPT fallback: {key}")
+                call_state.denial_reason_provisional = False
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -241,33 +317,38 @@ def _schedule_reason_classification(call_state, transcript_tail: str):
 
 
 def _update_denial_reason(call_state, payer_text: str):
-    """Per-utterance reason maintenance (free rules + gated GPT scheduling).
+    """Per-utterance reason maintenance — GPT is the AUTHORITATIVE classifier.
 
-    - A rule hit on a DIFFERENT reason than currently held overwrites it
-      (the rep's explanation beats the IVR readout) with a log line.
-    - If still unclassified in rep phase and the utterance carries a
-      "reason cue" ("denied because..."), schedule the GPT fallback over
-      the recent denial-phase conversation.
+    Reps phrase the SAME denial many different ways ("docs don't meet criteria"
+    / "coded incorrectly" / "we need records to support the code"), so keyword
+    rules alone misfire — a stray generic word ("billing error") can hijack the
+    real reason. So GPT judges the reason from the FULL conversation, and:
+
+    - GPT runs on every SUBSTANTIVE rep utterance while the reason is unknown or
+      only a keyword GUESS (provisional). GPT decides one-of-13 / out-of-scope /
+      unknown and OVERRIDES a provisional guess.
+    - Keyword rules only supply an INSTANT PROVISIONAL guess when nothing is set
+      yet — so the very next turn already has a checklist while GPT thinks in the
+      background. Keywords NEVER overwrite a reason once set; GPT owns corrections.
     """
-    hit = match_reason_rules(payer_text)
     current = getattr(call_state, "denial_reason_key", None)
-    if hit is not None and hit.key != current:
-        if current is not None:
-            logger.info(f"🧭 Denial reason OVERWRITTEN: {current} → {hit.key} (rep contradicted earlier signal)")
-        else:
-            logger.info(f"🧭 Denial reason matched by rules: {hit.key}")
-        call_state.denial_reason_key = hit.key
-        call_state.denial_reason_verbatim = payer_text.strip()[:300]
-        return
+    provisional = getattr(call_state, "denial_reason_provisional", False)
+    substantive = len(payer_text.strip()) >= _MIN_SUBSTANTIVE_LEN or has_reason_cue(payer_text)
 
-    if (
-        current is None
-        and call_state.phase == "denial_rep"
-        and has_reason_cue(payer_text)
-    ):
-        # Build a small tail of the denial-phase conversation for GPT.
+    # GPT primary: (re)classify while the reason is unknown or an unconfirmed guess.
+    if call_state.phase == "denial_rep" and substantive and (current is None or provisional):
         tail = _format_denial_history(call_state)
         _schedule_reason_classification(call_state, f"{tail}\nRep: {payer_text}")
+
+    # Instant provisional guess ONLY when nothing is set yet (gives an immediate
+    # checklist before GPT returns). Never overwrites; GPT will confirm/correct.
+    if current is None:
+        hit = match_reason_rules(payer_text)
+        if hit is not None:
+            call_state.denial_reason_key = hit.key
+            call_state.denial_reason_verbatim = payer_text.strip()[:300]
+            call_state.denial_reason_provisional = True
+            logger.info(f"🧭 Provisional reason from keywords (GPT will confirm): {hit.key}")
 
 
 def _format_denial_history(call_state) -> str:
@@ -358,13 +439,18 @@ async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
     # Re-arm the auto-hangup watchdog with the denial budget — rep hold
     # queues outlive the original claim-status timer.
     try:
-        old_task = getattr(call_state, "auto_hangup_task", None)
-        if old_task is not None and not old_task.done():
-            old_task.cancel()
+        # Create the NEW timer first, then cancel the old one — so if the config
+        # lookup or create_task throws, the call still has its original watchdog
+        # (rather than being left with NO auto-hangup, which could strand the
+        # CallState in active_calls forever).
         denial_secs = config_manager.get_denial_auto_hangup_seconds()
-        call_state.auto_hangup_task = asyncio.create_task(
+        new_task = asyncio.create_task(
             auto_hangup(call_id, active_calls, ensure_call_cleanup, denial_secs)
         )
+        old_task = getattr(call_state, "auto_hangup_task", None)
+        call_state.auto_hangup_task = new_task
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
         logger.info(f"⏲️ Auto-hangup re-armed for denial flow: {denial_secs}s")
     except Exception as e:
         logger.warning(f"Auto-hangup re-arm failed (original timer still active): {e}")
@@ -374,18 +460,19 @@ async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
         "representative instead of hanging up"
     )
 
-    # Reason classification, tier 1: free rules over the full claim readout
-    # (the IVR often names the reason, e.g. "documentation submitted does
-    # not meet the code criteria"). Tier 2: GPT fallback in the background
-    # if the rules found nothing — result lands before the rep picks up.
+    # Reason classification — GPT is authoritative. Keyword rules give an INSTANT
+    # provisional guess over the claim readout (the IVR often names the reason,
+    # e.g. "documentation submitted does not meet the code criteria"), but GPT
+    # ALWAYS runs in the background to confirm/correct it — its result lands
+    # before the rep picks up, and it overrides the keyword guess if they differ.
     if getattr(call_state, "denial_reason_key", None) is None:
         hit = match_reason_rules(claims_text)
         if hit is not None:
             call_state.denial_reason_key = hit.key
             call_state.denial_reason_verbatim = claims_text.strip()[-300:]
-            logger.info(f"🧭 Denial reason from claim readout (rules): {hit.key}")
-        else:
-            _schedule_reason_classification(call_state, claims_text)
+            call_state.denial_reason_provisional = True
+            logger.info(f"🧭 Provisional reason from claim readout (keywords, GPT will confirm): {hit.key}")
+        _schedule_reason_classification(call_state, claims_text)
 
     # Proactively ask for a representative — the claims menu is awaiting a
     # command right now. If TTS fails, the denial-IVR prompt drives the next
@@ -398,9 +485,40 @@ async def _pivot_to_denial_flow(call_id: str, claims_text: str) -> bool:
     return True
 
 
-async def _handle_denial_speech(text: str, call_state, call_control_id: str):
+async def _handle_denial_speech(text: str, call_control_id: str):
     """Handle one debounced utterance while the call is in a denial phase
-    (denial_ivr → reaching a representative, denial_rep → live conversation)."""
+    (denial_ivr → reaching a representative, denial_rep → live conversation).
+
+    Serialized per call: two debounced chunks arriving close together used to
+    fire two overlapping GPT turns that both spoke (garbled double-reply). A
+    per-call lock now serializes turns, and a sequence guard drops a turn that
+    was superseded by a newer utterance while it waited for the lock — so we
+    respond ONCE, to the most recent utterance.
+    """
+    call_state = active_calls.get(call_control_id)
+    if not call_state:
+        return
+    if not hasattr(call_state, "denial_turn_lock"):
+        call_state.denial_turn_lock = asyncio.Lock()
+    call_state.denial_turn_seq = getattr(call_state, "denial_turn_seq", 0) + 1
+    my_seq = call_state.denial_turn_seq
+
+    async with call_state.denial_turn_lock:
+        # A newer utterance arrived while we waited → this turn is stale; the
+        # newer one will respond with fuller context. Still record what the rep
+        # said (append_ivr already did that in handle_user_speech) but don't
+        # emit a second reply.
+        if my_seq != getattr(call_state, "denial_turn_seq", my_seq):
+            logger.info(f"⏭️ Superseded denial turn (seq {my_seq}) — skipping duplicate reply")
+            return
+        await _handle_denial_speech_locked(text, call_state, call_control_id)
+
+
+async def _handle_denial_speech_locked(text: str, call_state, call_control_id: str):
+    # The rep just said something → reset the hold-silence clock (and clear the
+    # nudge count, since a responsive rep shouldn't be nudged).
+    if call_state.phase == "denial_rep":
+        _mark_rep_activity(call_state)
 
     # IVR announced the transfer → flip to rep phase before template selection.
     if call_state.phase == "denial_ivr" and is_transfer_signal(text):
@@ -480,7 +598,7 @@ async def handle_user_speech(transcript: str, call_control_id: str):
     # denial handler — the claim-status ladder below is bypassed entirely.
     # Calls that never pivot (phase == "claim_status") are unaffected.
     if getattr(call_state, "phase", "claim_status") in ("denial_ivr", "denial_rep"):
-        await _handle_denial_speech(text, call_state, call_control_id)
+        await _handle_denial_speech(text, call_control_id)
         return
 
     # ── claim routing (the only logic in main) ──────────────────────────────

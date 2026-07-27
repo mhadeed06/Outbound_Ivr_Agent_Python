@@ -60,8 +60,10 @@ def build_denial_format_kwargs(call_state) -> dict:
         "billed_amount": visit_data.get("billed_amount")
         or os.getenv("DENIAL_TEST_BILLED_AMOUNT", "not available"),
         "provider_name": provider_name,
-        "practice_name": practice_name or "not provided",
-        "group_npi": group_npi or "not available",
+        # Sentinel the prompt is told to NEVER read aloud — it defers instead of
+        # saying "the practice is not provided".
+        "practice_name": practice_name or "__UNKNOWN__",
+        "group_npi": group_npi or "__UNKNOWN__",
         "agent_persona_name": os.getenv("DENIAL_AGENT_PERSONA_NAME", "Kevin"),
         "callback_number": os.getenv("DENIAL_CALLBACK_NUMBER", "469-581-2969"),
     }
@@ -85,11 +87,39 @@ def _denial_phase_history(call_state):
     return out
 
 
+# Rep stalls / non-answers — the rep is still working, NOT answering. These
+# must not mark a question as ANSWERED.
+_NON_ANSWER_PHRASES = (
+    "bear with me",
+    "let me check",
+    "let me look",
+    "let me pull",
+    "let me see",
+    "one moment",
+    "just a moment",
+    "give me a",
+    "hold on",
+    "please wait",
+    "let me verify",
+    "i do not have",
+    "i don't have",
+    "not sure",
+)
+
+
+def _is_non_answer(text: str) -> bool:
+    t = text.strip().lower()
+    if len(t) < 15:
+        return True
+    return any(p in t for p in _NON_ANSWER_PHRASES)
+
+
 def _question_status(question, history) -> str:
     """OPEN / ASKED / ANSWERED for one question, from the denial-phase history.
 
     ASKED    → one of our say-lines contains a question keyword.
-    ANSWERED → a substantive rep utterance (>= 15 chars) came after that ask.
+    ANSWERED → a REAL answer came after that ask (substantive AND not a stall
+               like "bear with me" / "let me check" — those keep it ASKED).
     """
     if not question.keywords:
         return "OPEN"
@@ -101,7 +131,7 @@ def _question_status(question, history) -> str:
     if asked_at is None:
         return "OPEN"
     for role, text in history[asked_at + 1:]:
-        if role == "rep" and len(text) >= 15:
+        if role == "rep" and not _is_non_answer(text):
             return "ANSWERED"
     return "ASKED"
 
@@ -127,7 +157,6 @@ def render_denial_context(call_state) -> str:
         )
 
     reason = get_reason(reason_key)
-    history = _denial_phase_history(call_state)
 
     if reason is not None:
         reason_line = (
@@ -142,21 +171,47 @@ def render_denial_context(call_state) -> str:
         )
         middle = GENERIC_QUESTIONS
 
-    questions = tuple(UNIVERSAL_QUESTIONS) + tuple(middle) + tuple(CLOSING_QUESTIONS)
+    # Reason-specific questions FIRST (the point of the call); the ICN is
+    # lower priority (usually already captured from the readout).
+    questions = tuple(middle) + tuple(UNIVERSAL_QUESTIONS) + tuple(CLOSING_QUESTIONS)
 
-    lines = [reason_line, "", "Questions to work through (ask only what's still open, ONE per turn):"]
+    lines = [reason_line, "", "Information you must OBTAIN for this denial, in priority order (ask ONE per turn, in order, starting from #1):"]
     for i, q in enumerate(questions, 1):
-        status = _question_status(q, history)
-        lines.append(f"{i}. [{status}] {q.text}")
+        lines.append(f"{i}. {q.text}")
     lines.append("")
     lines.append(
-        "A question marked [ANSWERED] is done — do not re-ask it. [ASKED] means you "
-        "asked but may not have a usable answer yet — check the conversation history. "
-        "The history below is the ground truth; these markers are hints."
+        f"🚨 COVERAGE — you must work through ALL {len(questions)} questions above before the "
+        "call ends. Each turn: look at the Conversation So Far, find the LOWEST-numbered "
+        "question you have NOT yet asked (and the rep did not already volunteer), and ask "
+        "exactly that one — ONE per turn. Skip a question ONLY if the rep already gave that "
+        "exact answer, or it's a conditional follow-up that clearly doesn't apply (e.g. a "
+        "'if plan-specific' item when it's a universal exclusion). Do NOT jump ahead, do NOT "
+        "re-ask something already answered, and do NOT end the call while any question is "
+        "still unasked."
+    )
+    lines.append("")
+    lines.append(
+        "🚨 YOU must judge, from the Conversation So Far below, whether you have "
+        "ACTUALLY obtained each item — do NOT assume. An item counts as obtained ONLY "
+        "if the rep stated the real value (the primary carrier's NAME, a fax NUMBER, a "
+        "specific date). A RELATED remark is NOT the value:"
     )
     lines.append(
-        "NOTE: The call-reference number is NOT in this list on purpose — it is "
-        "captured automatically from the transcript. Never ask the rep/IVR to read "
-        "or repeat a reference/claim/fax number; stay silent while numbers are read."
+        "   • \"Humana is secondary\" / \"there is a primary on file\" CONFIRMS coordination "
+        "of benefits but is NOT the primary carrier's name — you still need to ask: "
+        "\"Then who is the primary carrier on file?\""
+    )
+    lines.append(
+        "   • A stall (\"let me check\", \"bear with me\") is NOT a value — wait for the real one."
+    )
+    lines.append(
+        "Do NOT say \"that's all I needed\" or move to end the call while any item above is "
+        "still missing its real value. If the rep says they genuinely cannot provide a "
+        "required item, acknowledge that specific gap (\"understood, you don't have the "
+        "primary carrier on file\") — never pretend you obtained it."
+    )
+    lines.append(
+        "The call-reference number is NOT in this list — it's captured automatically from "
+        "the transcript. Never ask the rep to read or repeat a reference/claim/fax number."
     )
     return "\n".join(lines)
